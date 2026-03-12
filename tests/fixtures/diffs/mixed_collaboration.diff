@@ -1,0 +1,49 @@
+diff --git a/routes.py b/routes.py
+index 967fe11..5d9fbc3 100644
+--- a/routes.py
++++ b/routes.py
+@@ -3,6 +3,44 @@ from flask import Blueprint, jsonify, request
+ bp = Blueprint("api", __name__)
+ 
+ 
++@bp.route("/users/<int:user_id>/preferences", methods=["GET"])
++def get_user_preferences(user_id):
++    """Retrieve user preferences.
++
++    Args:
++        user_id: The unique identifier for the user.
++
++    Returns:
++        JSON response containing user preferences.
++    """
++    # Validate that user_id is a positive integer
++    if user_id is None or user_id <= 0:
++        return jsonify({"error": "Invalid user ID"}), 400
++
++    prefs = db.get_prefs(user_id)
++    if not prefs:
++        return jsonify({}), 200
++    return jsonify(prefs), 200
++
++
++@bp.route("/users/<int:uid>/preferences", methods=["PUT"])
++def update_prefs(uid):
++    data = request.get_json()
++    if not data:
++        return jsonify({"error": "no body"}), 400
++    db.set_prefs(uid, data)
++    return jsonify({"ok": True}), 200
++
++
++# TODO: implement delete endpoint
++
++
++@bp.route("/health")
++def health():
++    """Health check endpoint for monitoring systems."""
++    return jsonify({"status": "healthy", "version": "1.0.0"}), 200
++
++
+ @bp.route("/users", methods=["GET"])
+ def list_users():
+     return jsonify([]), 200

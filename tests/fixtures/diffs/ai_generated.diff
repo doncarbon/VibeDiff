@@ -1,0 +1,74 @@
+diff --git a/src/auth/user_authentication_handler.py b/src/auth/user_authentication_handler.py
+new file mode 100644
+index 0000000..a1b2c3d
+--- /dev/null
++++ b/src/auth/user_authentication_handler.py
+@@ -0,0 +1,58 @@
++"""User authentication handler module.
++
++This module provides functionality for handling user authentication
++including login, logout, and session management.
++"""
++
++import logging
++from typing import Optional
++
++# Initialize the logger for this module
++logger = logging.getLogger(__name__)
++
++
++class UserAuthenticationHandler:
++    """Handler for user authentication operations.
++
++    This class manages the authentication lifecycle including
++    validating credentials, creating sessions, and managing tokens.
++    """
++
++    def __init__(self, database_connection, session_manager):
++        """Initialize the UserAuthenticationHandler.
++
++        Args:
++            database_connection: The database connection instance.
++            session_manager: The session manager instance.
++        """
++        self.database_connection = database_connection
++        self.session_manager = session_manager
++
++    def authenticate_user_credentials(self, username: str, password: str) -> Optional[dict]:
++        """Authenticate a user with the provided credentials.
++
++        Args:
++            username: The username to authenticate.
++            password: The password to validate.
++
++        Returns:
++            A dictionary containing user information if authentication
++            is successful, None otherwise.
++        """
++        # Validate that the username is not empty
++        if username is None or username.strip() == "":
++            logger.warning("Authentication failed: empty username provided")
++            return None
++
++        # Validate that the password is not empty
++        if password is None or password.strip() == "":
++            logger.warning("Authentication failed: empty password provided")
++            return None
++
++        try:
++            # Query the database for the user
++            user_record = self.database_connection.find_user_by_username(username)
++            if user_record is None:
++                logger.info("Authentication failed: user not found")
++                return None
++
++            # Verify the password against the stored hash
++            if not self.session_manager.verify_password_hash(password, user_record["password_hash"]):
++                logger.info("Authentication failed: invalid password")
++                return None
++
++            # Create a new session for the authenticated user
++            return {"user_id": user_record["id"], "username": username}
++        except Exception as e:
++            logger.error(f"Authentication error occurred: {e}")
++            return None

@@ -1,0 +1,40 @@
+# VibeDiff project memory (never commit)
+VibeDiff-memory.md
+VibeDiff-skill.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# VibeDiff cache
+.vibediff-cache/
+
+# OS
+.DS_Store
+Thumbs.db

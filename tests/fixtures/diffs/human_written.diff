@@ -1,0 +1,27 @@
+diff --git a/cache.py b/cache.py
+index ecd5e83..6ddae2b 100644
+--- a/cache.py
++++ b/cache.py
+@@ -3,7 +3,21 @@ class LRUCache:
+         self._max = max_size
+         self._data: dict[str, Any] = {}
+         self._order: list[str] = []
++        self._hits = 0
++        self._misses = 0
++
++    @property
++    def hit_rate(self):
++        total = self._hits + self._misses
++        return self._hits / total if total else 0.0
+ 
+     def get(self, k):
+-        if k not in self._data:
++        v = self._data.get(k)
++        if v is None:
++            self._misses += 1
+             return None
++        self._hits += 1
++        # bump to end
++        self._order.remove(k)
++        self._order.append(k)
++        return v
