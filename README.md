@@ -1,19 +1,20 @@
-# VibeDiff
+# vibediff
 
-AI-era code review. Detects AI-generated patterns, style drift, and collaboration quality in your PRs.
+Knows when a PR doesn't belong in your codebase.
+
+vibediff learns how your project writes code — naming conventions, structure, patterns — then flags PRs that don't match. It catches style drift, cross-language idiom bleed (Java patterns in Python, etc.), and scores whether the author actually reviewed AI output or just committed it raw.
 
 ## Install
 
-```bash
+```
 pip install vibediff
 ```
 
 ## Usage
 
-```bash
-vibediff review HEAD~1          # review last commit
-vibediff review main..feature   # review branch diff
-vibediff learn .                # learn codebase conventions
+```
+vibediff review HEAD~3
+vibediff review main..feature
 ```
 
 ## License
