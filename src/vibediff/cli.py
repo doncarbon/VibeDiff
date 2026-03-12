@@ -8,16 +8,18 @@ from rich.table import Table
 
 from vibediff import __version__
 from vibediff.analyze import AnalysisReport, analyze_ai
+from vibediff.collaboration import CollabReport, analyze_collaboration
 from vibediff.diff import diff_from_ref
 from vibediff.drift import DriftReport, analyze_drift
 from vibediff.fingerprint import Fingerprint, scan
+from vibediff.idiom import IdiomReport, analyze_idioms
 
 console = Console()
 
 CACHE_DIR = ".vibediff-cache"
 FINGERPRINT_FILE = "fingerprint.json"
 
-SCORE_COLORS = {"high": "red", "medium": "yellow", "low": "green"}
+SCORE_COLORS = {"high": "red", "medium": "yellow", "low": "green", "good": "green", "mixed": "yellow", "poor": "red"}
 
 
 def _load_fingerprint() -> Fingerprint | None:
@@ -98,6 +100,49 @@ def _render_drift_report(report: DriftReport):
     console.print(table)
 
 
+def _render_collab_report(report: CollabReport):
+    if not report.findings:
+        return
+
+    color = SCORE_COLORS[report.label]
+    console.print(f"\n[bold]Collaboration[/bold]  [{color}]{report.collab_score:.0f}/100 ({report.label})[/{color}]")
+
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column(min_width=22)
+    table.add_column()
+    table.add_column(justify="right", min_width=8)
+
+    for f in sorted(report.findings, key=lambda x: x.severity, reverse=True):
+        sev_color = "red" if f.severity >= 0.7 else "yellow" if f.severity >= 0.4 else "dim"
+        bar = "█" * int(f.severity * 5) + "░" * (5 - int(f.severity * 5))
+        table.add_row(f"[cyan]{f.signal}[/cyan]", f.detail, f"[{sev_color}]{bar}[/{sev_color}]")
+
+    console.print(table)
+
+
+def _render_idiom_report(report: IdiomReport):
+    if not report.findings:
+        return
+
+    color = SCORE_COLORS[report.label]
+    console.print(f"\n[bold]Idiom Contamination[/bold]  [{color}]{report.idiom_score:.0f}/100 ({report.label})[/{color}]")
+
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    table.add_column(min_width=22)
+    table.add_column()
+    table.add_column(justify="right", min_width=8)
+
+    for f in sorted(report.findings, key=lambda x: x.severity, reverse=True):
+        sev_color = "red" if f.severity >= 0.7 else "yellow" if f.severity >= 0.4 else "dim"
+        bar = "█" * int(f.severity * 5) + "░" * (5 - int(f.severity * 5))
+        detail = f"{f.detail} [{f.source_lang}]"
+        if f.locations:
+            detail += f" ({', '.join(f.locations[:3])})"
+        table.add_row(f"[cyan]{f.signal}[/cyan]", detail, f"[{sev_color}]{bar}[/{sev_color}]")
+
+    console.print(table)
+
+
 @click.group()
 @click.version_option(version=__version__, prog_name="vibediff")
 def main():
@@ -129,6 +174,12 @@ def review(target: str, verbose: bool, no_fingerprint: bool):
         if fp:
             drift_report = analyze_drift(d, fp)
 
+    # Collaboration
+    collab_report = analyze_collaboration(d)
+
+    # Idiom contamination
+    idiom_report = analyze_idioms(d)
+
     # Header
     parts = [f"[bold]{len(d.files)} file(s)[/bold]", f"[green]+{added}[/green] [red]-{removed}[/red]"]
     if ai_report.findings:
@@ -142,7 +193,14 @@ def review(target: str, verbose: bool, no_fingerprint: bool):
     header.add_row(*parts)
     console.print(Panel(header, title="[bold]VibeDiff[/bold]", border_style="dim"))
 
-    if not ai_report.findings and (not drift_report or not drift_report.findings):
+    has_findings = (
+        ai_report.findings
+        or (drift_report and drift_report.findings)
+        or collab_report.findings
+        or idiom_report.findings
+    )
+
+    if not has_findings:
         if not fp and not no_fingerprint:
             console.print("[dim]Run 'vibediff learn' to enable style drift detection.[/dim]")
         else:
@@ -152,6 +210,8 @@ def review(target: str, verbose: bool, no_fingerprint: bool):
     _render_ai_report(ai_report)
     if drift_report:
         _render_drift_report(drift_report)
+    _render_collab_report(collab_report)
+    _render_idiom_report(idiom_report)
 
 
 @main.command()
