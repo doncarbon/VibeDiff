@@ -72,29 +72,36 @@ vibediff review HEAD~1 --format json
 vibediff review HEAD~1 --format md
 ```
 
-Example output:
+Every diff gets a letter grade (A-F) synthesized from all 4 analyzers:
 
 ```
-╭──────────────────────── VibeDiff ────────────────────────╮
-│ 3 file(s)  +180 -12  AI: 58  Drift: 42                  │
-╰──────────────────────────────────────────────────────────╯
+╭──────────────────────────────── VibeDiff ─────────────────────────────────╮
+│                                                                           │
+│  ████      3 file(s)  +180  -12                                           │
+│  ██ ██                                                                    │
+│  ██  ██      AI Detection           █████████░░░░░░      58    medium     │
+│  ██ ██       Style Drift            ██████░░░░░░░░░      42    medium     │
+│  ████        Collaboration          ██████████░░░░░      65    mixed      │
+│              Idiom Contamination    ██████░░░░░░░░░      40    medium     │
+│                                                                           │
+╰──────────────────────────────────────────────────────────────────────────╯
 
-AI Detection  58/100 (medium)
-  restating_comments    4 comments that restate the code       ███░░
-  verbose_names         3/5 functions have 4+ word names       ██░░░
-  low_burstiness        CV 0.31 (expected >0.6)                ██░░░
+──────────────── AI Detection  58/100 (medium) ─────────────────
+  restating_comments    4 comments that restate the code  ███░░
+  verbose_names         3/5 functions have 4+ word names  ██░░░
+  low_burstiness        CV 0.31 (expected >0.6)           ██░░░
 
-Style Drift  42/100 (medium)
-  naming_convention     expected snake_case, got camelCase     ███░░
-  comment_density       expected 8%, got 22%                   ██░░░
+────────────────── Style Drift  42/100 (medium) ────────────────
+  naming_convention     expected snake_case, got camelCase ███░░
+  comment_density       expected 8%, got 22%               ██░░░
 
-Collaboration  65/100 (mixed)
-  unresolved_todos      3 TODO comments left in                ██░░░
-  generic_names         4/12 variables have generic names      ██░░░
+─────────────── Collaboration  65/100 (mixed) ──────────────────
+  unresolved_todos      3 TODO comments left in            ██░░░
+  generic_names         4/12 variables have generic names  ██░░░
 
-Idiom Contamination  40/100 (medium)
-  getter_setter         3 getter/setter methods [java]         ██░░░
-  error_return_pattern  4 Go-style error returns [go]          ██░░░
+──────────── Idiom Contamination  40/100 (medium) ──────────────
+  getter_setter         3 getter/setter methods [java]     ███░░
+  error_return_pattern  4 Go-style error returns [go]      ██░░░
 ```
 
 ## GitHub Action

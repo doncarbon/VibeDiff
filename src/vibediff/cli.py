@@ -2,9 +2,12 @@ import json
 from pathlib import Path
 
 import click
-from rich.console import Console
+from rich.align import Align
+from rich.console import Console, Group
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.table import Table
+from rich.text import Text
 
 from vibediff import __version__
 from vibediff.analyze import AnalysisReport, analyze_ai
@@ -21,6 +24,91 @@ FINGERPRINT_FILE = "fingerprint.json"
 
 SCORE_COLORS = {"high": "red", "medium": "yellow", "low": "green", "good": "green", "mixed": "yellow", "poor": "red"}
 
+GRADE_ART = {
+    "A": [
+        "  ██  ",
+        " ████ ",
+        "██  ██",
+        "██████",
+        "██  ██",
+    ],
+    "B": [
+        "█████ ",
+        "██  ██",
+        "█████ ",
+        "██  ██",
+        "█████ ",
+    ],
+    "C": [
+        " ████ ",
+        "██    ",
+        "██    ",
+        "██    ",
+        " ████ ",
+    ],
+    "D": [
+        "████  ",
+        "██ ██ ",
+        "██  ██",
+        "██ ██ ",
+        "████  ",
+    ],
+    "F": [
+        "██████",
+        "██    ",
+        "█████ ",
+        "██    ",
+        "██    ",
+    ],
+}
+
+GRADE_COLORS = {"A": "bold green", "B": "green", "C": "yellow", "D": "red", "F": "bold red"}
+
+
+def _compute_grade(ai_score, drift_score, collab_score, idiom_score):
+    if drift_score is not None:
+        health = (
+            (100 - ai_score) * 0.30
+            + (100 - drift_score) * 0.20
+            + collab_score * 0.25
+            + (100 - idiom_score) * 0.25
+        )
+    else:
+        health = (
+            (100 - ai_score) * 0.35
+            + collab_score * 0.35
+            + (100 - idiom_score) * 0.30
+        )
+    if health >= 90:
+        return "A"
+    if health >= 75:
+        return "B"
+    if health >= 60:
+        return "C"
+    if health >= 40:
+        return "D"
+    return "F"
+
+
+def _score_bar(score: float, higher_is_better: bool = False) -> str:
+    width = 15
+    filled = round(score * width / 100)
+    empty = width - filled
+    quality = score if higher_is_better else 100 - score
+    if quality >= 70:
+        color = "green"
+    elif quality >= 40:
+        color = "yellow"
+    else:
+        color = "red"
+    return f"[{color}]{'█' * filled}[/{color}][dim]{'░' * empty}[/dim]"
+
+
+def _severity_bar(severity: float) -> str:
+    return "█" * int(severity * 5) + "░" * (5 - int(severity * 5))
+
+
+# --- Fingerprint persistence ---
 
 def _load_fingerprint() -> Fingerprint | None:
     path = Path(CACHE_DIR) / FINGERPRINT_FILE
@@ -55,104 +143,61 @@ def _save_fingerprint(fp: Fingerprint):
 
 # --- Rich terminal rendering ---
 
-def _render_ai_report(report: AnalysisReport):
-    if not report.findings:
-        return
+def _render_header(grade, file_count, added, removed, scores):
+    grade_color = GRADE_COLORS[grade]
+    art = Text("\n".join(GRADE_ART[grade]), style=grade_color)
 
-    color = SCORE_COLORS[report.label]
-    console.print(f"\n[bold]AI Detection[/bold]  [{color}]{report.ai_score:.0f}/100 ({report.label})[/{color}]")
+    summary = Text()
+    summary.append(f"{file_count} file(s)", style="bold")
+    summary.append("  ")
+    summary.append(f"+{added}", style="green")
+    summary.append("  ")
+    summary.append(f"-{removed}", style="red")
+
+    bars = Table(show_header=False, box=None, padding=(0, 2))
+    bars.add_column(min_width=22)
+    bars.add_column()
+    bars.add_column(justify="right", min_width=4)
+    bars.add_column(min_width=8)
+
+    for name, score, label, higher_better in scores:
+        bar = _score_bar(score, higher_better)
+        lbl_color = SCORE_COLORS[label]
+        bars.add_row(name, bar, f"{score:.0f}", f"[{lbl_color}]{label}[/{lbl_color}]")
+
+    layout = Table.grid(padding=(0, 4))
+    layout.add_column()
+    layout.add_column()
+    layout.add_row(Align.center(art, vertical="middle"), Group(summary, Text(""), bars))
+
+    console.print(Panel(layout, title="[bold]VibeDiff[/bold]", border_style="dim", padding=(1, 2)))
+
+
+def _render_findings(title, score, label, findings, detail_fn):
+    if not findings:
+        return
+    color = SCORE_COLORS[label]
+    console.print()
+    console.print(Rule(f"[bold]{title}[/bold]  [{color}]{score:.0f}/100 ({label})[/{color}]", style="dim"))
 
     table = Table(show_header=False, box=None, padding=(0, 2))
-    table.add_column(min_width=22)
+    table.add_column(style="cyan", min_width=22)
     table.add_column()
-    table.add_column(justify="right", min_width=8)
+    table.add_column(justify="right", min_width=7)
 
-    for f in sorted(report.findings, key=lambda x: x.severity, reverse=True):
+    for f in sorted(findings, key=lambda x: x.severity, reverse=True):
         sev_color = "red" if f.severity >= 0.7 else "yellow" if f.severity >= 0.4 else "dim"
         bar = "█" * int(f.severity * 5) + "░" * (5 - int(f.severity * 5))
-        detail = f.detail
-        if f.locations:
-            detail += f" ({', '.join(f.locations[:3])})"
-        table.add_row(f"[cyan]{f.signal}[/cyan]", detail, f"[{sev_color}]{bar}[/{sev_color}]")
-
-    console.print(table)
-
-
-def _render_drift_report(report: DriftReport):
-    if not report.findings:
-        return
-
-    color = SCORE_COLORS[report.label]
-    console.print(f"\n[bold]Style Drift[/bold]  [{color}]{report.drift_score:.0f}/100 ({report.label})[/{color}]")
-
-    table = Table(show_header=False, box=None, padding=(0, 2))
-    table.add_column(min_width=22)
-    table.add_column()
-    table.add_column(justify="right", min_width=8)
-
-    for f in sorted(report.findings, key=lambda x: x.severity, reverse=True):
-        sev_color = "red" if f.severity >= 0.7 else "yellow" if f.severity >= 0.4 else "dim"
-        bar = "█" * int(f.severity * 5) + "░" * (5 - int(f.severity * 5))
-        table.add_row(
-            f"[cyan]{f.signal}[/cyan]",
-            f"expected {f.expected}, got {f.found}",
-            f"[{sev_color}]{bar}[/{sev_color}]",
-        )
-
-    console.print(table)
-
-
-def _render_collab_report(report: CollabReport):
-    if not report.findings:
-        return
-
-    color = SCORE_COLORS[report.label]
-    console.print(f"\n[bold]Collaboration[/bold]  [{color}]{report.collab_score:.0f}/100 ({report.label})[/{color}]")
-
-    table = Table(show_header=False, box=None, padding=(0, 2))
-    table.add_column(min_width=22)
-    table.add_column()
-    table.add_column(justify="right", min_width=8)
-
-    for f in sorted(report.findings, key=lambda x: x.severity, reverse=True):
-        sev_color = "red" if f.severity >= 0.7 else "yellow" if f.severity >= 0.4 else "dim"
-        bar = "█" * int(f.severity * 5) + "░" * (5 - int(f.severity * 5))
-        table.add_row(f"[cyan]{f.signal}[/cyan]", f.detail, f"[{sev_color}]{bar}[/{sev_color}]")
-
-    console.print(table)
-
-
-def _render_idiom_report(report: IdiomReport):
-    if not report.findings:
-        return
-
-    color = SCORE_COLORS[report.label]
-    console.print(f"\n[bold]Idiom Contamination[/bold]  [{color}]{report.idiom_score:.0f}/100 ({report.label})[/{color}]")
-
-    table = Table(show_header=False, box=None, padding=(0, 2))
-    table.add_column(min_width=22)
-    table.add_column()
-    table.add_column(justify="right", min_width=8)
-
-    for f in sorted(report.findings, key=lambda x: x.severity, reverse=True):
-        sev_color = "red" if f.severity >= 0.7 else "yellow" if f.severity >= 0.4 else "dim"
-        bar = "█" * int(f.severity * 5) + "░" * (5 - int(f.severity * 5))
-        detail = f"{f.detail} [{f.source_lang}]"
-        if f.locations:
-            detail += f" ({', '.join(f.locations[:3])})"
-        table.add_row(f"[cyan]{f.signal}[/cyan]", detail, f"[{sev_color}]{bar}[/{sev_color}]")
+        table.add_row(f.signal, detail_fn(f), f"[{sev_color}]{bar}[/{sev_color}]")
 
     console.print(table)
 
 
 # --- JSON output ---
 
-def _severity_bar(severity: float) -> str:
-    return "█" * int(severity * 5) + "░" * (5 - int(severity * 5))
-
-
-def _to_json(ai_report, drift_report, collab_report, idiom_report, file_count, added, removed):
+def _to_json(grade, ai_report, drift_report, collab_report, idiom_report, file_count, added, removed):
     result = {
+        "grade": grade,
         "files": file_count,
         "lines_added": added,
         "lines_removed": removed,
@@ -195,8 +240,8 @@ def _to_json(ai_report, drift_report, collab_report, idiom_report, file_count, a
 
 # --- Markdown output ---
 
-def _to_markdown(ai_report, drift_report, collab_report, idiom_report, file_count, added, removed):
-    lines = [f"## VibeDiff Report", "", f"**{file_count} file(s)** | +{added} -{removed}", ""]
+def _to_markdown(grade, ai_report, drift_report, collab_report, idiom_report, file_count, added, removed):
+    lines = [f"## VibeDiff Report — Grade: {grade}", "", f"**{file_count} file(s)** | +{added} -{removed}", ""]
 
     if ai_report.findings:
         lines.append(f"### AI Detection — {ai_report.ai_score:.0f}/100 ({ai_report.label})")
@@ -288,26 +333,25 @@ def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool)
     collab_report = analyze_collaboration(d)
     idiom_report = analyze_idioms(d)
 
+    drift_score = drift_report.drift_score if drift_report else None
+    grade = _compute_grade(ai_report.ai_score, drift_score, collab_report.collab_score, idiom_report.idiom_score)
+
     if fmt == "json":
-        click.echo(json.dumps(_to_json(ai_report, drift_report, collab_report, idiom_report, len(d.files), added, removed), indent=2))
+        click.echo(json.dumps(_to_json(grade, ai_report, drift_report, collab_report, idiom_report, len(d.files), added, removed), indent=2))
         return
 
     if fmt == "md":
-        click.echo(_to_markdown(ai_report, drift_report, collab_report, idiom_report, len(d.files), added, removed))
+        click.echo(_to_markdown(grade, ai_report, drift_report, collab_report, idiom_report, len(d.files), added, removed))
         return
 
-    # Rich terminal output
-    parts = [f"[bold]{len(d.files)} file(s)[/bold]", f"[green]+{added}[/green] [red]-{removed}[/red]"]
-    if ai_report.findings:
-        c = SCORE_COLORS[ai_report.label]
-        parts.append(f"AI: [{c}]{ai_report.ai_score:.0f}[/{c}]")
-    if drift_report and drift_report.findings:
-        c = SCORE_COLORS[drift_report.label]
-        parts.append(f"Drift: [{c}]{drift_report.drift_score:.0f}[/{c}]")
+    # Rich terminal output — header panel with grade + score bars
+    scores = [("AI Detection", ai_report.ai_score, ai_report.label, False)]
+    if drift_report:
+        scores.append(("Style Drift", drift_report.drift_score, drift_report.label, False))
+    scores.append(("Collaboration", collab_report.collab_score, collab_report.label, True))
+    scores.append(("Idiom Contamination", idiom_report.idiom_score, idiom_report.label, False))
 
-    header = Table.grid(padding=(0, 2))
-    header.add_row(*parts)
-    console.print(Panel(header, title="[bold]VibeDiff[/bold]", border_style="dim"))
+    _render_header(grade, len(d.files), added, removed, scores)
 
     has_findings = (
         ai_report.findings
@@ -319,15 +363,23 @@ def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool)
     if not has_findings:
         if not fp and not no_fingerprint:
             console.print("[dim]Run 'vibediff learn' to enable style drift detection.[/dim]")
-        else:
-            console.print("[green]Clean.[/green]")
         return
 
-    _render_ai_report(ai_report)
+    # Detailed findings with Rule headers
+    _render_findings("AI Detection", ai_report.ai_score, ai_report.label, ai_report.findings,
+                     lambda f: f.detail + (f" ({', '.join(f.locations[:3])})" if f.locations else ""))
+
     if drift_report:
-        _render_drift_report(drift_report)
-    _render_collab_report(collab_report)
-    _render_idiom_report(idiom_report)
+        _render_findings("Style Drift", drift_report.drift_score, drift_report.label, drift_report.findings,
+                         lambda f: f"expected {f.expected}, got {f.found}")
+
+    _render_findings("Collaboration", collab_report.collab_score, collab_report.label, collab_report.findings,
+                     lambda f: f.detail)
+
+    _render_findings("Idiom Contamination", idiom_report.idiom_score, idiom_report.label, idiom_report.findings,
+                     lambda f: f"{f.detail} \\[{f.source_lang}]" + (f" ({', '.join(f.locations[:3])})" if f.locations else ""))
+
+    console.print()
 
 
 @main.command()
