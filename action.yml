@@ -1,0 +1,43 @@
+name: 'VibeDiff'
+description: 'Analyze PRs for AI patterns, style drift, and idiom contamination'
+branding:
+  icon: 'search'
+  color: 'orange'
+
+inputs:
+  version:
+    description: 'VibeDiff version to install'
+    default: 'latest'
+  fingerprint:
+    description: 'Path to fingerprint.json (enables style drift detection)'
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install VibeDiff
+      shell: bash
+      run: |
+        if [ "${{ inputs.version }}" = "latest" ]; then
+          pip install vibediff
+        else
+          pip install vibediff==${{ inputs.version }}
+        fi
+
+    - name: Set up fingerprint
+      if: inputs.fingerprint != ''
+      shell: bash
+      run: |
+        mkdir -p .vibediff-cache
+        cp "${{ inputs.fingerprint }}" .vibediff-cache/fingerprint.json
+
+    - name: Run VibeDiff
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        vibediff review --pr "${{ github.event.pull_request.number }}" --format md >> "$GITHUB_STEP_SUMMARY"

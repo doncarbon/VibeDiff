@@ -107,3 +107,23 @@ def diff_from_ref(target: str) -> Diff:
     d = parse_diff(raw)
     d.head_ref = target
     return d
+
+
+def _run_gh_pr_diff(pr_ref: str) -> str:
+    cmd = ["gh", "pr", "diff", pr_ref, "--patch"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"gh pr diff failed: {e.stderr.strip()}", file=sys.stderr)
+        sys.exit(1)
+    except FileNotFoundError:
+        print("gh CLI not found — install it from https://cli.github.com", file=sys.stderr)
+        sys.exit(1)
+    return result.stdout
+
+
+def diff_from_pr(pr_ref: str) -> Diff:
+    raw = _run_gh_pr_diff(pr_ref)
+    d = parse_diff(raw)
+    d.head_ref = f"PR #{pr_ref}"
+    return d

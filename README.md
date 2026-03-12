@@ -56,11 +56,20 @@ vibediff review HEAD~1
 # Review a range
 vibediff review main..feature
 
+# Review a GitHub PR (requires gh CLI)
+vibediff review --pr 42
+
 # Learn your codebase conventions first (enables drift detection)
 vibediff learn
 
 # Skip drift analysis
 vibediff review HEAD~1 --no-fingerprint
+
+# JSON output (for CI pipelines)
+vibediff review HEAD~1 --format json
+
+# Markdown output (for PR comments)
+vibediff review HEAD~1 --format md
 ```
 
 Example output:
@@ -86,6 +95,36 @@ Collaboration  65/100 (mixed)
 Idiom Contamination  40/100 (medium)
   getter_setter         3 getter/setter methods [java]         ██░░░
   error_return_pattern  4 Go-style error returns [go]          ██░░░
+```
+
+## GitHub Action
+
+Add VibeDiff to your PR workflow:
+
+```yaml
+# .github/workflows/vibediff.yml
+name: VibeDiff
+on:
+  pull_request:
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: doncarbon/VibeDiff@main
+```
+
+The action posts a markdown report to the PR's job summary. To enable style drift detection, commit a fingerprint and pass it:
+
+```yaml
+      - uses: doncarbon/VibeDiff@main
+        with:
+          fingerprint: .vibediff-cache/fingerprint.json
 ```
 
 ## Author
