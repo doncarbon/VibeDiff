@@ -14,6 +14,9 @@ inputs:
   anthropic_api_key:
     description: 'Anthropic API key for LLM synthesis (optional)'
     default: ''
+  comment:
+    description: 'Post review as a PR comment (in addition to step summary)'
+    default: 'true'
 
 runs:
   using: 'composite'
@@ -44,8 +47,12 @@ runs:
         GH_TOKEN: ${{ github.token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
       run: |
-        SYNTH_FLAG=""
+        FLAGS=""
         if [ -n "$ANTHROPIC_API_KEY" ]; then
-          SYNTH_FLAG="--synthesize"
+          FLAGS="$FLAGS --synthesize"
         fi
-        vibediff review --pr "${{ github.event.pull_request.number }}" --format md $SYNTH_FLAG >> "$GITHUB_STEP_SUMMARY"
+        if [ "${{ inputs.comment }}" = "true" ]; then
+          FLAGS="$FLAGS --comment"
+        fi
+        PR="${{ github.event.pull_request.number }}"
+        vibediff review --pr "$PR" --format md $FLAGS >> "$GITHUB_STEP_SUMMARY"

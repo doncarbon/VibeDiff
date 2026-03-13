@@ -289,6 +289,25 @@ def _to_markdown(grade, ai_report, drift_report, collab_report, idiom_report, fi
     return "\n".join(lines)
 
 
+# --- PR comment posting ---
+
+def _post_pr_comment(pr_number: str, body: str) -> bool:
+    """Post a comment on a PR via gh CLI. Returns True on success."""
+    import subprocess
+    try:
+        subprocess.run(
+            ["gh", "pr", "comment", pr_number, "--body", body],
+            check=True, capture_output=True, text=True,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Failed to post PR comment: {e.stderr.strip()}", err=True)
+        return False
+    except FileNotFoundError:
+        click.echo("gh CLI not found — install it from https://cli.github.com", err=True)
+        return False
+
+
 # --- Filtering and baseline ---
 
 BASELINE_FILE = "baseline.json"
@@ -423,8 +442,13 @@ def main():
 @click.option("--pr", is_flag=True, help="Treat TARGET as a GitHub PR number (requires gh CLI).")
 @click.option("--synthesize", "do_synth", is_flag=True, help="Use Claude API for natural-language synthesis.")
 @click.option("--no-baseline", is_flag=True, help="Ignore baseline, show all findings.")
-def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool, do_synth: bool, no_baseline: bool):
+@click.option("--comment", is_flag=True, help="Post review as a PR comment (requires --pr and gh CLI).")
+def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool, do_synth: bool, no_baseline: bool, comment: bool):
     """Review a diff for AI patterns and style drift."""
+    if comment and not pr:
+        click.echo("--comment requires --pr", err=True)
+        raise SystemExit(1)
+
     cfg = load_config()
     d = diff_from_pr(target) if pr else diff_from_ref(target)
     _filter_files(d, cfg.exclude)
@@ -480,6 +504,16 @@ def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool,
         synthesis = synthesize(raw_diff, analysis_json, grade)
         if synthesis is None and fmt == "rich":
             console.print("[dim]Set ANTHROPIC_API_KEY to enable synthesis (pip install vibediff\\[llm]).[/dim]")
+
+    # Generate markdown for --comment (regardless of output format)
+    if comment:
+        md_body = _to_markdown(grade, ai_report, drift_report, collab_report, idiom_report, len(d.files), added, removed)
+        if synthesis:
+            md_body += f"\n### Synthesis\n\n{synthesis}\n"
+        if _post_pr_comment(target, md_body):
+            console.print(f"[green]Posted review comment on PR #{target}[/green]")
+        else:
+            raise SystemExit(1)
 
     if fmt == "json":
         result = _to_json(grade, ai_report, drift_report, collab_report, idiom_report, len(d.files), added, removed)
