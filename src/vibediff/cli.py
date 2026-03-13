@@ -289,13 +289,43 @@ def _to_markdown(grade, ai_report, drift_report, collab_report, idiom_report, fi
     return "\n".join(lines)
 
 
-# --- Filtering ---
+# --- Filtering and baseline ---
+
+BASELINE_FILE = "baseline.json"
+
 
 def _filter_findings(findings, ignore: list[str]):
     """Remove findings whose signal is in the ignore list."""
     if not ignore:
         return findings
     return [f for f in findings if f.signal not in ignore]
+
+
+def _load_baseline() -> set[str] | None:
+    """Load baseline signal set. Returns set of signal names or None."""
+    path = Path(CACHE_DIR) / BASELINE_FILE
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+        return set(data.get("signals", []))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _save_baseline(signals: set[str]):
+    Path(CACHE_DIR).mkdir(exist_ok=True)
+    data = {"signals": sorted(signals)}
+    (Path(CACHE_DIR) / BASELINE_FILE).write_text(
+        json.dumps(data, indent=2)
+    )
+
+
+def _apply_baseline(findings, baseline: set[str] | None):
+    """Remove findings that are in the baseline."""
+    if baseline is None:
+        return findings
+    return [f for f in findings if f.signal not in baseline]
 
 
 def _filter_files(diff, exclude: list[str]):
@@ -312,7 +342,8 @@ def _filter_files(diff, exclude: list[str]):
 
 # --- Core logic (used by CLI and MCP server) ---
 
-def run_review(target: str, pr: bool = False, no_fingerprint: bool = False, do_synth: bool = False) -> dict | None:
+def run_review(target: str, pr: bool = False, no_fingerprint: bool = False,
+               do_synth: bool = False, no_baseline: bool = False) -> dict | None:
     """Run all analyzers and return structured results."""
     cfg = load_config()
     d = diff_from_pr(target) if pr else diff_from_ref(target)
@@ -340,6 +371,15 @@ def run_review(target: str, pr: bool = False, no_fingerprint: bool = False, do_s
         drift_report.findings = _filter_findings(drift_report.findings, cfg.ignore)
     collab_report.findings = _filter_findings(collab_report.findings, cfg.ignore)
     idiom_report.findings = _filter_findings(idiom_report.findings, cfg.ignore)
+
+    # Apply baseline
+    if not no_baseline:
+        baseline = _load_baseline()
+        ai_report.findings = _apply_baseline(ai_report.findings, baseline)
+        if drift_report:
+            drift_report.findings = _apply_baseline(drift_report.findings, baseline)
+        collab_report.findings = _apply_baseline(collab_report.findings, baseline)
+        idiom_report.findings = _apply_baseline(idiom_report.findings, baseline)
 
     drift_score = drift_report.drift_score if drift_report else None
     grade = _compute_grade(ai_report.ai_score, drift_score, collab_report.collab_score, idiom_report.idiom_score)
@@ -382,7 +422,8 @@ def main():
 @click.option("--format", "fmt", type=click.Choice(["rich", "json", "md"]), default="rich", help="Output format.")
 @click.option("--pr", is_flag=True, help="Treat TARGET as a GitHub PR number (requires gh CLI).")
 @click.option("--synthesize", "do_synth", is_flag=True, help="Use Claude API for natural-language synthesis.")
-def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool, do_synth: bool):
+@click.option("--no-baseline", is_flag=True, help="Ignore baseline, show all findings.")
+def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool, do_synth: bool, no_baseline: bool):
     """Review a diff for AI patterns and style drift."""
     cfg = load_config()
     d = diff_from_pr(target) if pr else diff_from_ref(target)
@@ -417,6 +458,15 @@ def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool,
         drift_report.findings = _filter_findings(drift_report.findings, cfg.ignore)
     collab_report.findings = _filter_findings(collab_report.findings, cfg.ignore)
     idiom_report.findings = _filter_findings(idiom_report.findings, cfg.ignore)
+
+    # Apply baseline
+    if not no_baseline:
+        baseline = _load_baseline()
+        ai_report.findings = _apply_baseline(ai_report.findings, baseline)
+        if drift_report:
+            drift_report.findings = _apply_baseline(drift_report.findings, baseline)
+        collab_report.findings = _apply_baseline(collab_report.findings, baseline)
+        idiom_report.findings = _apply_baseline(idiom_report.findings, baseline)
 
     drift_score = drift_report.drift_score if drift_report else None
     grade = _compute_grade(ai_report.ai_score, drift_score, collab_report.collab_score, idiom_report.idiom_score)
@@ -510,6 +560,53 @@ def learn(path: str, force: bool):
     console.print(f"  Type annotations: {fp.type_annotation_ratio:.0%} params, {fp.return_annotation_ratio:.0%} returns")
     console.print(f"  Error handling: {fp.try_except_ratio:.0%} funcs use try/except, {fp.specific_except_ratio:.0%} specific")
     console.print(f"  Decorators: {fp.decorator_density:.1f} per function")
+
+
+@main.command()
+@click.argument("target", default="HEAD~1")
+@click.option("--pr", is_flag=True, help="Treat TARGET as a GitHub PR number.")
+@click.option("--clear", is_flag=True, help="Remove the current baseline.")
+def baseline(target: str, pr: bool, clear: bool):
+    """Save current findings as baseline so future reviews only flag new issues."""
+    if clear:
+        path = Path(CACHE_DIR) / BASELINE_FILE
+        if path.exists():
+            path.unlink()
+            console.print("[green]Baseline cleared.[/green]")
+        else:
+            console.print("[yellow]No baseline to clear.[/yellow]")
+        return
+
+    cfg = load_config()
+    d = diff_from_pr(target) if pr else diff_from_ref(target)
+    _filter_files(d, cfg.exclude)
+    if not d.files:
+        console.print("[yellow]No changes to baseline.[/yellow]")
+        return
+
+    ai_report = analyze_ai(d)
+    collab_report = analyze_collaboration(d)
+    idiom_report = analyze_idioms(d)
+
+    signals: set[str] = set()
+    for f in ai_report.findings:
+        signals.add(f.signal)
+    for f in collab_report.findings:
+        signals.add(f.signal)
+    for f in idiom_report.findings:
+        signals.add(f.signal)
+
+    fp = _load_fingerprint()
+    if fp:
+        drift_report = analyze_drift(d, fp)
+        for f in drift_report.findings:
+            signals.add(f.signal)
+
+    _save_baseline(signals)
+    console.print(f"[green]Baseline saved: {len(signals)} signal(s) suppressed in future reviews.[/green]")
+    if signals:
+        for s in sorted(signals):
+            console.print(f"  [dim]• {s}[/dim]")
 
 
 @main.command()

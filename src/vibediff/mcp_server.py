@@ -38,6 +38,10 @@ REVIEW_SCHEMA = {
             "type": "boolean", "default": False,
             "description": "LLM synthesis (needs API key).",
         },
+        "no_baseline": {
+            "type": "boolean", "default": False,
+            "description": "Ignore baseline, show all findings.",
+        },
     },
 }
 
@@ -86,6 +90,7 @@ def _make_server():
                 pr=arguments.get("pr", False),
                 no_fingerprint=arguments.get("no_fingerprint", False),
                 do_synth=arguments.get("synthesize", False),
+                no_baseline=arguments.get("no_baseline", False),
             )
             if result is None:
                 text = "No changes found."
