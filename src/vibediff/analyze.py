@@ -68,26 +68,40 @@ def _score_comments(files: list[FileDiff]) -> tuple[float, list[Finding]]:
     total_added = 0
     comment_lines = 0
     restate_count = 0
+    restate_files: set[str] = set()
     section_headers = 0
+    section_files: set[str] = set()
     docstring_restates = 0
+    docstring_files: set[str] = set()
+    high_comment_files: list[str] = []
 
     for f in files:
+        file_added = 0
+        file_comments = 0
         for line in f.added:
             stripped = line.strip()
             total_added += 1
+            file_added += 1
 
             if stripped.startswith("#"):
                 comment_lines += 1
+                file_comments += 1
                 for pat in RESTATE_PATTERNS:
                     if pat.search(stripped):
                         restate_count += 1
+                        restate_files.add(f.path)
                         break
                 if SECTION_HEADER.match(stripped):
                     section_headers += 1
+                    section_files.add(f.path)
 
             if stripped.startswith('"""') or stripped.startswith("'''"):
                 if DOCSTRING_RESTATE.search(stripped):
                     docstring_restates += 1
+                    docstring_files.add(f.path)
+
+        if file_added > 5 and file_comments / file_added > 0.2:
+            high_comment_files.append(f.path)
 
     if total_added == 0:
         return 0.0, findings
@@ -99,6 +113,7 @@ def _score_comments(files: list[FileDiff]) -> tuple[float, list[Finding]]:
             signal="comment_density",
             detail=f"{comment_ratio:.0%} of added lines are comments (typical human code: 5-15%)",
             severity=min(comment_ratio / 0.35, 1.0),
+            locations=high_comment_files[:5],
         ))
 
     if restate_count >= 2:
@@ -106,6 +121,7 @@ def _score_comments(files: list[FileDiff]) -> tuple[float, list[Finding]]:
             signal="restating_comments",
             detail=f"{restate_count} comments that restate what the code does",
             severity=min(restate_count / 6, 1.0),
+            locations=sorted(restate_files)[:5],
         ))
 
     if section_headers >= 2:
@@ -113,6 +129,7 @@ def _score_comments(files: list[FileDiff]) -> tuple[float, list[Finding]]:
             signal="section_headers",
             detail=f"{section_headers} section-divider comments (# ---, # ===)",
             severity=min(section_headers / 4, 1.0),
+            locations=sorted(section_files)[:5],
         ))
 
     if docstring_restates >= 2:
@@ -120,6 +137,7 @@ def _score_comments(files: list[FileDiff]) -> tuple[float, list[Finding]]:
             signal="docstring_restates",
             detail=f"{docstring_restates} docstrings that restate the function name",
             severity=min(docstring_restates / 4, 1.0),
+            locations=sorted(docstring_files)[:5],
         ))
 
     return _signal_score(findings), findings
@@ -147,7 +165,9 @@ def _word_count(name: str) -> int:
 def _score_naming(files: list[FileDiff]) -> tuple[float, list[Finding]]:
     findings: list[Finding] = []
     func_names: list[str] = []
+    func_files: dict[str, str] = {}  # name -> file path
     var_names: list[str] = []
+    var_files: set[str] = set()
 
     for f in files:
         if f.language != "python":
@@ -156,36 +176,38 @@ def _score_naming(files: list[FileDiff]) -> tuple[float, list[Finding]]:
             m = FUNC_DEF.search(line)
             if m:
                 func_names.append(m.group(1))
+                func_files[m.group(1)] = f.path
             m = VAR_ASSIGN.match(line)
             if m and not m.group(2).startswith("_") and m.group(2) not in ("self", "cls"):
                 var_names.append(m.group(2))
+                var_files.add(f.path)
 
     if not func_names and not var_names:
         return 0.0, findings
 
-    # Check for verbose naming — AI loves 4+ word function names
     verbose_funcs = [n for n in func_names if _word_count(n) >= 4]
     if verbose_funcs and len(verbose_funcs) >= len(func_names) * 0.4:
+        locs = [f"{func_files[n]}:{n}" for n in verbose_funcs[:5] if n in func_files]
         findings.append(Finding(
             signal="verbose_names",
             detail=f"{len(verbose_funcs)}/{len(func_names)} functions have 4+ word names",
             severity=min(len(verbose_funcs) / max(len(func_names), 1), 1.0),
-            locations=verbose_funcs[:5],
+            locations=locs,
         ))
 
-    # Check for uniform name length — humans vary, AI is consistent
     if len(func_names) >= 4:
         lengths = [_word_count(n) for n in func_names]
         avg = sum(lengths) / len(lengths)
         variance = sum((x - avg) ** 2 for x in lengths) / len(lengths)
         if variance < 0.5 and avg >= 3:
+            files_with_funcs = sorted({func_files[n] for n in func_names if n in func_files})
             findings.append(Finding(
                 signal="uniform_naming",
                 detail=f"Function names are suspiciously uniform ({avg:.1f} words avg, variance {variance:.2f})",
                 severity=0.6,
+                locations=files_with_funcs[:5],
             ))
 
-    # Check for absence of short variable names — humans use i, n, k, v, etc.
     if var_names:
         short_vars = [n for n in var_names if len(n) <= 2]
         short_ratio = len(short_vars) / len(var_names)
@@ -194,6 +216,7 @@ def _score_naming(files: list[FileDiff]) -> tuple[float, list[Finding]]:
                 signal="no_short_vars",
                 detail=f"No short variable names in {len(var_names)} variables (humans use i, k, v, etc.)",
                 severity=0.5,
+                locations=sorted(var_files)[:5],
             ))
 
     return _signal_score(findings), findings
@@ -258,7 +281,9 @@ BROAD_EXCEPT = re.compile(r"except\s+(Exception|BaseException)\b")
 def _score_structure(files: list[FileDiff]) -> tuple[float, list[Finding]]:
     findings: list[Finding] = []
     guard_count = 0
+    guard_files: set[str] = set()
     broad_except_count = 0
+    except_files: set[str] = set()
     func_count = 0
 
     for f in files:
@@ -269,27 +294,29 @@ def _score_structure(files: list[FileDiff]) -> tuple[float, list[Finding]]:
                 func_count += 1
             if GUARD_CLAUSE.search(line):
                 guard_count += 1
+                guard_files.add(f.path)
             if BROAD_EXCEPT.search(line):
                 broad_except_count += 1
+                except_files.add(f.path)
 
     if func_count == 0:
         return 0.0, findings
 
-    # Excessive guard clauses
     guard_ratio = guard_count / func_count
     if guard_ratio >= 0.5 and guard_count >= 2:
         findings.append(Finding(
             signal="excessive_guards",
             detail=f"{guard_count} 'is None' guards across {func_count} functions",
             severity=min(guard_ratio / 1.5, 1.0),
+            locations=sorted(guard_files)[:5],
         ))
 
-    # Broad exception handling
     if broad_except_count >= 1:
         findings.append(Finding(
             signal="broad_exceptions",
             detail=f"{broad_except_count} broad 'except Exception' blocks",
             severity=min(broad_except_count / 4, 1.0),
+            locations=sorted(except_files)[:5],
         ))
 
     return _signal_score(findings), findings

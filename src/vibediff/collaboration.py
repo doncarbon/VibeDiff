@@ -18,6 +18,7 @@ class CollabFinding:
     signal: str
     detail: str
     severity: float
+    locations: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -37,16 +38,19 @@ class CollabReport:
 def _check_todos(files: list[FileDiff]) -> list[CollabFinding]:
     findings = []
     count = 0
+    todo_files: set[str] = set()
     for f in files:
         for line in f.added:
             if TODO_PATTERN.search(line):
                 count += 1
+                todo_files.add(f.path)
 
     if count >= 2:
         findings.append(CollabFinding(
             signal="unresolved_todos",
             detail=f"{count} TODO comments left in",
             severity=min(count / 5, 1.0),
+            locations=sorted(todo_files)[:5],
         ))
     return findings
 
@@ -55,6 +59,7 @@ def _check_generic_names(files: list[FileDiff]) -> list[CollabFinding]:
     findings = []
     generic_count = 0
     total_vars = 0
+    generic_files: set[str] = set()
 
     for f in files:
         if f.language != "python":
@@ -68,12 +73,14 @@ def _check_generic_names(files: list[FileDiff]) -> list[CollabFinding]:
                 total_vars += 1
                 if GENERIC_NAMES.match(name):
                     generic_count += 1
+                    generic_files.add(f.path)
 
     if total_vars >= 5 and generic_count / total_vars > 0.3:
         findings.append(CollabFinding(
             signal="generic_names",
             detail=f"{generic_count}/{total_vars} variables have generic names (data, result, output, etc.)",
             severity=min(generic_count / total_vars / 0.5, 1.0),
+            locations=sorted(generic_files)[:5],
         ))
     return findings
 
@@ -81,16 +88,19 @@ def _check_generic_names(files: list[FileDiff]) -> list[CollabFinding]:
 def _check_generic_tests(files: list[FileDiff]) -> list[CollabFinding]:
     findings = []
     count = 0
+    test_files: set[str] = set()
     for f in files:
         for line in f.added:
             if GENERIC_TEST.search(line):
                 count += 1
+                test_files.add(f.path)
 
     if count >= 2:
         findings.append(CollabFinding(
             signal="generic_tests",
             detail=f"{count} test functions with generic names (test_function_1, test_method_2, etc.)",
             severity=min(count / 4, 1.0),
+            locations=sorted(test_files)[:5],
         ))
     return findings
 
@@ -98,18 +108,21 @@ def _check_generic_tests(files: list[FileDiff]) -> list[CollabFinding]:
 def _check_placeholders(files: list[FileDiff]) -> list[CollabFinding]:
     findings = []
     count = 0
+    stub_files: set[str] = set()
     for f in files:
         if f.language != "python":
             continue
         for line in f.added:
             if PLACEHOLDER.search(line.strip()):
                 count += 1
+                stub_files.add(f.path)
 
     if count >= 3:
         findings.append(CollabFinding(
             signal="placeholders",
             detail=f"{count} placeholder/stub lines (pass, ..., NotImplementedError)",
             severity=min(count / 6, 1.0),
+            locations=sorted(stub_files)[:5],
         ))
     return findings
 

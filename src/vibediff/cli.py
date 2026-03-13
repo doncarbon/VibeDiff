@@ -207,7 +207,7 @@ def _to_json(grade, ai_report, drift_report, collab_report, idiom_report, file_c
             "score": round(collab_report.collab_score, 1),
             "label": collab_report.label,
             "findings": [
-                {"signal": f.signal, "detail": f.detail, "severity": round(f.severity, 2)}
+                {"signal": f.signal, "detail": f.detail, "severity": round(f.severity, 2), "locations": f.locations}
                 for f in collab_report.findings
             ],
         },
@@ -264,7 +264,10 @@ def _to_markdown(grade, ai_report, drift_report, collab_report, idiom_report, fi
         lines.append("| Signal | Detail | Severity |")
         lines.append("|--------|--------|----------|")
         for f in sorted(collab_report.findings, key=lambda x: x.severity, reverse=True):
-            lines.append(f"| `{f.signal}` | {f.detail} | {_severity_bar(f.severity)} |")
+            detail = f.detail
+            if f.locations:
+                detail += f" ({', '.join(f.locations[:3])})"
+            lines.append(f"| `{f.signal}` | {detail} | {_severity_bar(f.severity)} |")
         lines.append("")
 
     if idiom_report.findings:
@@ -473,7 +476,7 @@ def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool,
                          lambda f: f"expected {f.expected}, got {f.found}")
 
     _render_findings("Collaboration", collab_report.collab_score, collab_report.label, collab_report.findings,
-                     lambda f: f.detail)
+                     lambda f: f.detail + (f" ({', '.join(f.locations[:3])})" if f.locations else ""))
 
     _render_findings("Idiom Contamination", idiom_report.idiom_score, idiom_report.label, idiom_report.findings,
                      lambda f: f"{f.detail} \\[{f.source_lang}]" + (f" ({', '.join(f.locations[:3])})" if f.locations else ""))
