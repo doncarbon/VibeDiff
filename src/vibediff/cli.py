@@ -12,6 +12,7 @@ from rich.text import Text
 from vibediff import __version__
 from vibediff.analyze import analyze_ai
 from vibediff.collaboration import analyze_collaboration
+from vibediff.config import Config, load_config
 from vibediff.diff import diff_from_pr, diff_from_ref
 from vibediff.drift import analyze_drift
 from vibediff.fingerprint import Fingerprint, scan
@@ -285,11 +286,34 @@ def _to_markdown(grade, ai_report, drift_report, collab_report, idiom_report, fi
     return "\n".join(lines)
 
 
+# --- Filtering ---
+
+def _filter_findings(findings, ignore: list[str]):
+    """Remove findings whose signal is in the ignore list."""
+    if not ignore:
+        return findings
+    return [f for f in findings if f.signal not in ignore]
+
+
+def _filter_files(diff, exclude: list[str]):
+    """Remove files matching exclude glob patterns from a diff."""
+    if not exclude:
+        return diff
+    from fnmatch import fnmatch
+    diff.files = [
+        f for f in diff.files
+        if not any(fnmatch(f.path, pat) for pat in exclude)
+    ]
+    return diff
+
+
 # --- Core logic (used by CLI and MCP server) ---
 
 def run_review(target: str, pr: bool = False, no_fingerprint: bool = False, do_synth: bool = False) -> dict | None:
     """Run all analyzers and return structured results."""
+    cfg = load_config()
     d = diff_from_pr(target) if pr else diff_from_ref(target)
+    _filter_files(d, cfg.exclude)
     if not d.files:
         return None
 
@@ -306,6 +330,13 @@ def run_review(target: str, pr: bool = False, no_fingerprint: bool = False, do_s
 
     collab_report = analyze_collaboration(d)
     idiom_report = analyze_idioms(d)
+
+    # Apply ignore filter
+    ai_report.findings = _filter_findings(ai_report.findings, cfg.ignore)
+    if drift_report:
+        drift_report.findings = _filter_findings(drift_report.findings, cfg.ignore)
+    collab_report.findings = _filter_findings(collab_report.findings, cfg.ignore)
+    idiom_report.findings = _filter_findings(idiom_report.findings, cfg.ignore)
 
     drift_score = drift_report.drift_score if drift_report else None
     grade = _compute_grade(ai_report.ai_score, drift_score, collab_report.collab_score, idiom_report.idiom_score)
@@ -350,7 +381,9 @@ def main():
 @click.option("--synthesize", "do_synth", is_flag=True, help="Use Claude API for natural-language synthesis.")
 def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool, do_synth: bool):
     """Review a diff for AI patterns and style drift."""
+    cfg = load_config()
     d = diff_from_pr(target) if pr else diff_from_ref(target)
+    _filter_files(d, cfg.exclude)
     if not d.files:
         if fmt == "json":
             click.echo("{}")
@@ -374,6 +407,13 @@ def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool,
 
     collab_report = analyze_collaboration(d)
     idiom_report = analyze_idioms(d)
+
+    # Apply ignore filter
+    ai_report.findings = _filter_findings(ai_report.findings, cfg.ignore)
+    if drift_report:
+        drift_report.findings = _filter_findings(drift_report.findings, cfg.ignore)
+    collab_report.findings = _filter_findings(collab_report.findings, cfg.ignore)
+    idiom_report.findings = _filter_findings(idiom_report.findings, cfg.ignore)
 
     drift_score = drift_report.drift_score if drift_report else None
     grade = _compute_grade(ai_report.ai_score, drift_score, collab_report.collab_score, idiom_report.idiom_score)
