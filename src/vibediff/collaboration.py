@@ -6,11 +6,22 @@ from dataclasses import dataclass, field
 from vibediff.diff import Diff, FileDiff
 
 FUNC_DEF = re.compile(r"^\s*def\s+(\w+)")
-TODO_PATTERN = re.compile(r"#\s*TODO", re.I)
+TODO_PATTERN = re.compile(r"(?:#|//)\s*TODO", re.I)
 GENERIC_NAMES = re.compile(r"^(data|result|output|response|value|item|obj|temp|tmp|ret|res|info)$")
 GENERIC_TEST = re.compile(r"def\s+test_(function|method|case|it|thing|stuff|example)_?\d*\s*\(")
+JS_GENERIC_TEST = re.compile(
+    r"(?:it|test)\s*\(\s*['\"](?:should\s+)?(?:works?|tests?|does something|example|stuff|thing)\b",
+    re.I,
+)
 VAR_ASSIGN = re.compile(r"^\s*(\w+)\s*=\s*")
+JS_VAR_ASSIGN = re.compile(r"^\s*(?:const|let|var)\s+(\w+)\s*=")
 PLACEHOLDER = re.compile(r"(pass\s*$|raise\s+NotImplementedError|\.\.\.\s*$)")
+JS_PLACEHOLDER = re.compile(
+    r"(throw\s+new\s+Error\s*\(\s*['\"](?:Not implemented|TODO|FIXME)['\"]|"
+    r"//\s*TODO|"
+    r"console\.log\s*\(\s*['\"](?:not implemented|todo)['\"])",
+    re.I,
+)
 
 
 @dataclass
@@ -62,18 +73,26 @@ def _check_generic_names(files: list[FileDiff]) -> list[CollabFinding]:
     generic_files: set[str] = set()
 
     for f in files:
-        if f.language != "python":
-            continue
-        for line in f.added:
-            m = VAR_ASSIGN.match(line)
-            if m:
-                name = m.group(1)
-                if name in ("self", "cls", "_"):
-                    continue
-                total_vars += 1
-                if GENERIC_NAMES.match(name):
-                    generic_count += 1
-                    generic_files.add(f.path)
+        if f.language == "python":
+            for line in f.added:
+                m = VAR_ASSIGN.match(line)
+                if m:
+                    name = m.group(1)
+                    if name in ("self", "cls", "_"):
+                        continue
+                    total_vars += 1
+                    if GENERIC_NAMES.match(name):
+                        generic_count += 1
+                        generic_files.add(f.path)
+        elif f.language in ("javascript", "typescript"):
+            for line in f.added:
+                m = JS_VAR_ASSIGN.match(line)
+                if m:
+                    name = m.group(1)
+                    total_vars += 1
+                    if GENERIC_NAMES.match(name):
+                        generic_count += 1
+                        generic_files.add(f.path)
 
     if total_vars >= 5 and generic_count / total_vars > 0.3:
         findings.append(CollabFinding(
@@ -91,7 +110,7 @@ def _check_generic_tests(files: list[FileDiff]) -> list[CollabFinding]:
     test_files: set[str] = set()
     for f in files:
         for line in f.added:
-            if GENERIC_TEST.search(line):
+            if GENERIC_TEST.search(line) or JS_GENERIC_TEST.search(line):
                 count += 1
                 test_files.add(f.path)
 
@@ -110,12 +129,16 @@ def _check_placeholders(files: list[FileDiff]) -> list[CollabFinding]:
     count = 0
     stub_files: set[str] = set()
     for f in files:
-        if f.language != "python":
-            continue
-        for line in f.added:
-            if PLACEHOLDER.search(line.strip()):
-                count += 1
-                stub_files.add(f.path)
+        if f.language == "python":
+            for line in f.added:
+                if PLACEHOLDER.search(line.strip()):
+                    count += 1
+                    stub_files.add(f.path)
+        elif f.language in ("javascript", "typescript"):
+            for line in f.added:
+                if JS_PLACEHOLDER.search(line.strip()):
+                    count += 1
+                    stub_files.add(f.path)
 
     if count >= 3:
         findings.append(CollabFinding(

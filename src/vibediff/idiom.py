@@ -165,6 +165,76 @@ def _js_in_python(files: list[FileDiff]) -> list[IdiomFinding]:
     return findings
 
 
+# --- Python patterns in JS/TS ---
+
+SNAKE_IN_JS = re.compile(r"(?:function\s+|(?:const|let|var)\s+)([a-z]+_[a-z_]+)")
+DICT_COMP_IN_JS = re.compile(r"for\s*\(.*\s+in\s+.*\)\s*\{")
+TUPLE_RETURN_JS = re.compile(r"return\s*\[.*,\s*(?:null|true|false)\s*\]")
+DUNDER_JS = re.compile(r"__\w+__")
+
+
+def _python_in_js(files: list[FileDiff]) -> list[IdiomFinding]:
+    findings = []
+    snake_count = 0
+    snake_files: set[str] = set()
+
+    for f in files:
+        if f.language not in ("javascript", "typescript"):
+            continue
+        for line in f.added:
+            if SNAKE_IN_JS.search(line):
+                snake_count += 1
+                snake_files.add(f.path)
+
+    if snake_count >= 3:
+        findings.append(IdiomFinding(
+            signal="snake_case_in_js",
+            source_lang="python",
+            detail=f"{snake_count} snake_case function/variable names — JS uses camelCase",
+            severity=min(snake_count / 6, 1.0),
+            locations=sorted(snake_files)[:5],
+        ))
+
+    return findings
+
+
+# --- Java patterns in JS/TS ---
+
+JAVA_CLASS_ABUSE_JS = re.compile(
+    r"class\s+\w*(Factory|Builder|Manager|Handler|Singleton|Provider)\b"
+)
+JAVA_INTERFACE_JS = re.compile(r"interface\s+I[A-Z]\w+")
+JAVA_GETTER_JS = re.compile(r"(?:get|set)[A-Z]\w+\s*\(")
+
+
+def _java_in_js(files: list[FileDiff]) -> list[IdiomFinding]:
+    findings = []
+    pattern_count = 0
+    pattern_files: set[str] = set()
+
+    for f in files:
+        if f.language not in ("javascript", "typescript"):
+            continue
+        for line in f.added:
+            if JAVA_CLASS_ABUSE_JS.search(line):
+                pattern_count += 1
+                pattern_files.add(f.path)
+            if JAVA_INTERFACE_JS.search(line):
+                pattern_count += 1
+                pattern_files.add(f.path)
+
+    if pattern_count >= 2:
+        findings.append(IdiomFinding(
+            signal="java_patterns_in_js",
+            source_lang="java",
+            detail=f"{pattern_count} Java-style patterns (Factory/Builder/IInterface) in JS/TS",
+            severity=min(pattern_count / 4, 1.0),
+            locations=sorted(pattern_files)[:5],
+        ))
+
+    return findings
+
+
 def analyze_idioms(diff: Diff) -> IdiomReport:
     all_findings: list[IdiomFinding] = []
 
@@ -172,6 +242,8 @@ def analyze_idioms(diff: Diff) -> IdiomReport:
     all_findings.extend(_go_in_python(diff.files))
     all_findings.extend(_cpp_in_python(diff.files))
     all_findings.extend(_js_in_python(diff.files))
+    all_findings.extend(_python_in_js(diff.files))
+    all_findings.extend(_java_in_js(diff.files))
 
     if not all_findings:
         return IdiomReport(idiom_score=0)

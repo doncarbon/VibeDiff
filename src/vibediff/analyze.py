@@ -30,26 +30,36 @@ class AnalysisReport:
 
 # --- comment pattern detection ---
 
-# Comments that just restate what the code does
-RESTATE_PATTERNS = [
-    re.compile(r"#\s*(initialize|init|set up|setup|create|define|declare)\s+(the|a)\s+", re.I),
-    re.compile(r"#\s*(import|load)\s+(the\s+)?(required|necessary|needed)", re.I),
-    re.compile(r"#\s*(check|validate|verify)\s+(if|that|whether)\s+", re.I),
-    re.compile(r"#\s*(return|send back)\s+(the|a)\s+", re.I),
-    re.compile(r"#\s*(log|print|output)\s+(the|a|an)\s+", re.I),
-    re.compile(r"#\s*(get|fetch|retrieve|query)\s+(the|a)\s+", re.I),
-    re.compile(r"#\s*(update|modify|change|set)\s+(the|a)\s+", re.I),
-    re.compile(r"#\s*(handle|process|parse)\s+(the|a)\s+", re.I),
-]
+# Comments that just restate what the code does (Python # and JS //)
+_RESTATE_VERBS = (
+    r"(initialize|init|set up|setup|create|define|declare)\s+(the|a)\s+",
+    r"(import|load)\s+(the\s+)?(required|necessary|needed)",
+    r"(check|validate|verify)\s+(if|that|whether)\s+",
+    r"(return|send back)\s+(the|a)\s+",
+    r"(log|print|output)\s+(the|a|an)\s+",
+    r"(get|fetch|retrieve|query)\s+(the|a)\s+",
+    r"(update|modify|change|set)\s+(the|a)\s+",
+    r"(handle|process|parse)\s+(the|a)\s+",
+)
+RESTATE_PATTERNS = [re.compile(r"#\s*" + v, re.I) for v in _RESTATE_VERBS]
+JS_RESTATE_PATTERNS = [re.compile(r"//\s*" + v, re.I) for v in _RESTATE_VERBS]
 
 # Section-header style comments AI loves
 SECTION_HEADER = re.compile(r"#\s*-{3,}|#\s*={3,}|#\s*\*{3,}")
+JS_SECTION_HEADER = re.compile(r"//\s*-{3,}|//\s*={3,}|//\s*\*{3,}")
 
 # Docstrings that restate function name
 DOCSTRING_RESTATE = re.compile(
     r'"""'
     r"(Initialize|Create|Return|Get|Set|Update|Delete|Handle|Process|Validate|Check)"
     r"\s+(the|a|an)\s+",
+    re.I,
+)
+
+# JSDoc that restates function name
+JSDOC_RESTATE = re.compile(
+    r"\*\s*(Initialize|Create|Return|Get|Set|Update|Delete|Handle|Process|Validate|Check)"
+    r"s?\s+(the|a|an)\s+",
     re.I,
 )
 
@@ -76,6 +86,7 @@ def _score_comments(files: list[FileDiff]) -> tuple[float, list[Finding]]:
     high_comment_files: list[str] = []
 
     for f in files:
+        is_js = f.language in ("javascript", "typescript")
         file_added = 0
         file_comments = 0
         for line in f.added:
@@ -95,8 +106,25 @@ def _score_comments(files: list[FileDiff]) -> tuple[float, list[Finding]]:
                     section_headers += 1
                     section_files.add(f.path)
 
+            elif is_js and stripped.startswith("//"):
+                comment_lines += 1
+                file_comments += 1
+                for pat in JS_RESTATE_PATTERNS:
+                    if pat.search(stripped):
+                        restate_count += 1
+                        restate_files.add(f.path)
+                        break
+                if JS_SECTION_HEADER.match(stripped):
+                    section_headers += 1
+                    section_files.add(f.path)
+
             if stripped.startswith('"""') or stripped.startswith("'''"):
                 if DOCSTRING_RESTATE.search(stripped):
+                    docstring_restates += 1
+                    docstring_files.add(f.path)
+
+            if is_js and stripped.startswith("*"):
+                if JSDOC_RESTATE.search(stripped):
                     docstring_restates += 1
                     docstring_files.add(f.path)
 
@@ -151,6 +179,12 @@ FUNC_DEF = re.compile(r"def\s+(\w+)")
 CLASS_DEF = re.compile(r"class\s+(\w+)")
 VAR_ASSIGN = re.compile(r"^(\s*)(\w+)\s*[=:]")
 
+# JS/TS patterns
+JS_FUNC_DEF = re.compile(
+    r"(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?(?:\(|function))"
+)
+JS_VAR_ASSIGN = re.compile(r"^\s*(?:const|let|var)\s+(\w+)\s*=")
+
 
 def _word_count(name: str) -> int:
     """Count words in a snake_case or camelCase identifier."""
@@ -170,17 +204,27 @@ def _score_naming(files: list[FileDiff]) -> tuple[float, list[Finding]]:
     var_files: set[str] = set()
 
     for f in files:
-        if f.language != "python":
-            continue
-        for line in f.added:
-            m = FUNC_DEF.search(line)
-            if m:
-                func_names.append(m.group(1))
-                func_files[m.group(1)] = f.path
-            m = VAR_ASSIGN.match(line)
-            if m and not m.group(2).startswith("_") and m.group(2) not in ("self", "cls"):
-                var_names.append(m.group(2))
-                var_files.add(f.path)
+        if f.language == "python":
+            for line in f.added:
+                m = FUNC_DEF.search(line)
+                if m:
+                    func_names.append(m.group(1))
+                    func_files[m.group(1)] = f.path
+                m = VAR_ASSIGN.match(line)
+                if m and not m.group(2).startswith("_") and m.group(2) not in ("self", "cls"):
+                    var_names.append(m.group(2))
+                    var_files.add(f.path)
+        elif f.language in ("javascript", "typescript"):
+            for line in f.added:
+                m = JS_FUNC_DEF.search(line)
+                if m:
+                    name = m.group(1) or m.group(2)
+                    func_names.append(name)
+                    func_files[name] = f.path
+                m = JS_VAR_ASSIGN.match(line)
+                if m:
+                    var_names.append(m.group(1))
+                    var_files.add(f.path)
 
     if not func_names and not var_names:
         return 0.0, findings
@@ -277,6 +321,13 @@ def _score_burstiness(files: list[FileDiff]) -> tuple[float, list[Finding]]:
 GUARD_CLAUSE = re.compile(r"if\s+\w+\s+is\s+None")
 BROAD_EXCEPT = re.compile(r"except\s+(Exception|BaseException)\b")
 
+# JS/TS structural patterns
+JS_NULL_GUARD = re.compile(r"if\s*\(\s*!?\w+\s*[!=]==?\s*(?:null|undefined)\s*\)")
+JS_BROAD_CATCH = re.compile(r"catch\s*\(\s*\w*\s*\)\s*\{")
+JS_FUNC = re.compile(
+    r"(?:function\s+\w+|(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?(?:\(|function))"
+)
+
 
 def _score_structure(files: list[FileDiff]) -> tuple[float, list[Finding]]:
     findings: list[Finding] = []
@@ -287,17 +338,26 @@ def _score_structure(files: list[FileDiff]) -> tuple[float, list[Finding]]:
     func_count = 0
 
     for f in files:
-        if f.language != "python":
-            continue
-        for line in f.added:
-            if FUNC_DEF.search(line):
-                func_count += 1
-            if GUARD_CLAUSE.search(line):
-                guard_count += 1
-                guard_files.add(f.path)
-            if BROAD_EXCEPT.search(line):
-                broad_except_count += 1
-                except_files.add(f.path)
+        if f.language == "python":
+            for line in f.added:
+                if FUNC_DEF.search(line):
+                    func_count += 1
+                if GUARD_CLAUSE.search(line):
+                    guard_count += 1
+                    guard_files.add(f.path)
+                if BROAD_EXCEPT.search(line):
+                    broad_except_count += 1
+                    except_files.add(f.path)
+        elif f.language in ("javascript", "typescript"):
+            for line in f.added:
+                if JS_FUNC.search(line):
+                    func_count += 1
+                if JS_NULL_GUARD.search(line):
+                    guard_count += 1
+                    guard_files.add(f.path)
+                if JS_BROAD_CATCH.search(line):
+                    broad_except_count += 1
+                    except_files.add(f.path)
 
     if func_count == 0:
         return 0.0, findings
@@ -306,7 +366,7 @@ def _score_structure(files: list[FileDiff]) -> tuple[float, list[Finding]]:
     if guard_ratio >= 0.5 and guard_count >= 2:
         findings.append(Finding(
             signal="excessive_guards",
-            detail=f"{guard_count} 'is None' guards across {func_count} functions",
+            detail=f"{guard_count} null/None guards across {func_count} functions",
             severity=min(guard_ratio / 1.5, 1.0),
             locations=sorted(guard_files)[:5],
         ))
@@ -314,7 +374,7 @@ def _score_structure(files: list[FileDiff]) -> tuple[float, list[Finding]]:
     if broad_except_count >= 1:
         findings.append(Finding(
             signal="broad_exceptions",
-            detail=f"{broad_except_count} broad 'except Exception' blocks",
+            detail=f"{broad_except_count} broad exception/catch blocks",
             severity=min(broad_except_count / 4, 1.0),
             locations=sorted(except_files)[:5],
         ))
@@ -334,7 +394,6 @@ SIGNAL_WEIGHTS = {
 
 def analyze_ai(diff: Diff) -> AnalysisReport:
     """Run all AI detection signals on a diff and return a scored report."""
-    python_files = [f for f in diff.files if f.language == "python"]
     all_files = diff.files
 
     scores: dict[str, float] = {}
@@ -343,13 +402,13 @@ def analyze_ai(diff: Diff) -> AnalysisReport:
     scores["comments"], findings = _score_comments(all_files)
     all_findings.extend(findings)
 
-    scores["naming"], findings = _score_naming(python_files)
+    scores["naming"], findings = _score_naming(all_files)
     all_findings.extend(findings)
 
     scores["burstiness"], findings = _score_burstiness(all_files)
     all_findings.extend(findings)
 
-    scores["structure"], findings = _score_structure(python_files)
+    scores["structure"], findings = _score_structure(all_files)
     all_findings.extend(findings)
 
     # Only weight categories that fired — zeros shouldn't dilute the score
