@@ -1,5 +1,5 @@
 from vibediff.diff import Diff, FileDiff, Hunk
-from vibediff.drift import analyze_drift, DriftReport
+from vibediff.drift import DriftReport, analyze_drift
 from vibediff.fingerprint import Fingerprint
 
 

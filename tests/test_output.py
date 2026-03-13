@@ -1,10 +1,10 @@
 import json
 
 from vibediff.analyze import AnalysisReport, Finding
-from vibediff.collaboration import CollabReport, CollabFinding
-from vibediff.drift import DriftReport, DriftFinding
-from vibediff.idiom import IdiomReport, IdiomFinding
-from vibediff.cli import _to_json, _to_markdown, _compute_grade
+from vibediff.cli import _compute_grade, _to_json, _to_markdown
+from vibediff.collaboration import CollabFinding, CollabReport
+from vibediff.drift import DriftFinding, DriftReport
+from vibediff.idiom import IdiomFinding, IdiomReport
 
 
 def _empty_reports():

@@ -1,5 +1,5 @@
-from vibediff.idiom import analyze_idioms, IdiomReport
 from vibediff.diff import Diff, FileDiff, Hunk
+from vibediff.idiom import IdiomReport, analyze_idioms
 
 
 def _make_diff(lines: list[str], lang: str = "python") -> Diff:

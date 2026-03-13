@@ -1,14 +1,13 @@
 from vibediff.analyze import (
-    Finding,
     AnalysisReport,
-    analyze_ai,
+    _score_burstiness,
     _score_comments,
     _score_naming,
-    _score_burstiness,
     _score_structure,
     _word_count,
+    analyze_ai,
 )
-from vibediff.diff import FileDiff, Hunk, Diff, parse_diff
+from vibediff.diff import Diff, FileDiff, Hunk, parse_diff
 
 
 class TestWordCount:

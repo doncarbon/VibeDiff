@@ -10,12 +10,12 @@ from rich.table import Table
 from rich.text import Text
 
 from vibediff import __version__
-from vibediff.analyze import AnalysisReport, analyze_ai
-from vibediff.collaboration import CollabReport, analyze_collaboration
+from vibediff.analyze import analyze_ai
+from vibediff.collaboration import analyze_collaboration
 from vibediff.diff import diff_from_pr, diff_from_ref
-from vibediff.drift import DriftReport, analyze_drift
+from vibediff.drift import analyze_drift
 from vibediff.fingerprint import Fingerprint, scan
-from vibediff.idiom import IdiomReport, analyze_idioms
+from vibediff.idiom import analyze_idioms
 
 console = Console()
 
@@ -125,19 +125,12 @@ def _load_fingerprint() -> Fingerprint | None:
         return None
 
 
+SKIP_FIELDS = {"func_names", "func_lengths"}
+
+
 def _save_fingerprint(fp: Fingerprint):
     Path(CACHE_DIR).mkdir(exist_ok=True)
-    data = {
-        "files_scanned": fp.files_scanned,
-        "total_lines": fp.total_lines,
-        "snake_case_ratio": fp.snake_case_ratio,
-        "camel_case_ratio": fp.camel_case_ratio,
-        "avg_func_name_words": fp.avg_func_name_words,
-        "comment_ratio": fp.comment_ratio,
-        "avg_func_length": fp.avg_func_length,
-        "from_import_ratio": fp.from_import_ratio,
-        "docstring_ratio": fp.docstring_ratio,
-    }
+    data = {k: v for k, v in fp.__dict__.items() if k not in SKIP_FIELDS and not k.startswith("_")}
     (Path(CACHE_DIR) / FINGERPRINT_FILE).write_text(json.dumps(data, indent=2))
 
 
@@ -292,6 +285,54 @@ def _to_markdown(grade, ai_report, drift_report, collab_report, idiom_report, fi
     return "\n".join(lines)
 
 
+# --- Core logic (used by CLI and MCP server) ---
+
+def run_review(target: str, pr: bool = False, no_fingerprint: bool = False, do_synth: bool = False) -> dict | None:
+    """Run all analyzers and return structured results."""
+    d = diff_from_pr(target) if pr else diff_from_ref(target)
+    if not d.files:
+        return None
+
+    added = sum(len(f.added) for f in d.files)
+    removed = sum(len(f.removed) for f in d.files)
+
+    ai_report = analyze_ai(d)
+
+    drift_report = None
+    if not no_fingerprint:
+        fp = _load_fingerprint()
+        if fp:
+            drift_report = analyze_drift(d, fp)
+
+    collab_report = analyze_collaboration(d)
+    idiom_report = analyze_idioms(d)
+
+    drift_score = drift_report.drift_score if drift_report else None
+    grade = _compute_grade(ai_report.ai_score, drift_score, collab_report.collab_score, idiom_report.idiom_score)
+
+    result = _to_json(grade, ai_report, drift_report, collab_report, idiom_report, len(d.files), added, removed)
+
+    if do_synth:
+        from vibediff.synthesize import synthesize as _synth
+        raw_diff = d.raw if hasattr(d, "raw") else ""
+        synthesis = _synth(raw_diff, result, grade)
+        if synthesis:
+            result["synthesis"] = synthesis
+
+    return result
+
+
+def run_learn(path: str = ".", force: bool = False) -> dict | None:
+    """Scan codebase and save fingerprint. Returns fingerprint data or None if exists and not forced."""
+    existing = _load_fingerprint()
+    if existing and not force:
+        return None
+
+    fp = scan(path)
+    _save_fingerprint(fp)
+    return {k: v for k, v in fp.__dict__.items() if k not in SKIP_FIELDS and not k.startswith("_")}
+
+
 # --- CLI ---
 
 @click.group()
@@ -306,7 +347,8 @@ def main():
 @click.option("--no-fingerprint", is_flag=True, help="Skip style drift analysis.")
 @click.option("--format", "fmt", type=click.Choice(["rich", "json", "md"]), default="rich", help="Output format.")
 @click.option("--pr", is_flag=True, help="Treat TARGET as a GitHub PR number (requires gh CLI).")
-def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool):
+@click.option("--synthesize", "do_synth", is_flag=True, help="Use Claude API for natural-language synthesis.")
+def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool, do_synth: bool):
     """Review a diff for AI patterns and style drift."""
     d = diff_from_pr(target) if pr else diff_from_ref(target)
     if not d.files:
@@ -336,12 +378,28 @@ def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool)
     drift_score = drift_report.drift_score if drift_report else None
     grade = _compute_grade(ai_report.ai_score, drift_score, collab_report.collab_score, idiom_report.idiom_score)
 
+    # Optional LLM synthesis
+    synthesis = None
+    if do_synth:
+        from vibediff.synthesize import synthesize
+        raw_diff = d.raw if hasattr(d, "raw") else ""
+        analysis_json = _to_json(grade, ai_report, drift_report, collab_report, idiom_report, len(d.files), added, removed)
+        synthesis = synthesize(raw_diff, analysis_json, grade)
+        if synthesis is None and fmt == "rich":
+            console.print("[dim]Set ANTHROPIC_API_KEY to enable synthesis (pip install vibediff\\[llm]).[/dim]")
+
     if fmt == "json":
-        click.echo(json.dumps(_to_json(grade, ai_report, drift_report, collab_report, idiom_report, len(d.files), added, removed), indent=2))
+        result = _to_json(grade, ai_report, drift_report, collab_report, idiom_report, len(d.files), added, removed)
+        if synthesis:
+            result["synthesis"] = synthesis
+        click.echo(json.dumps(result, indent=2))
         return
 
     if fmt == "md":
-        click.echo(_to_markdown(grade, ai_report, drift_report, collab_report, idiom_report, len(d.files), added, removed))
+        md = _to_markdown(grade, ai_report, drift_report, collab_report, idiom_report, len(d.files), added, removed)
+        if synthesis:
+            md += f"\n### Synthesis\n\n{synthesis}\n"
+        click.echo(md)
         return
 
     # Rich terminal output — header panel with grade + score bars
@@ -363,7 +421,8 @@ def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool)
     if not has_findings:
         if not fp and not no_fingerprint:
             console.print("[dim]Run 'vibediff learn' to enable style drift detection.[/dim]")
-        return
+        if not synthesis:
+            return
 
     # Detailed findings with Rule headers
     _render_findings("AI Detection", ai_report.ai_score, ai_report.label, ai_report.findings,
@@ -378,6 +437,10 @@ def review(target: str, verbose: bool, no_fingerprint: bool, fmt: str, pr: bool)
 
     _render_findings("Idiom Contamination", idiom_report.idiom_score, idiom_report.label, idiom_report.findings,
                      lambda f: f"{f.detail} \\[{f.source_lang}]" + (f" ({', '.join(f.locations[:3])})" if f.locations else ""))
+
+    if synthesis:
+        console.print()
+        console.print(Panel(synthesis, title="[bold]Synthesis[/bold]", border_style="cyan", padding=(1, 2)))
 
     console.print()
 
@@ -401,3 +464,13 @@ def learn(path: str, force: bool):
     console.print(f"  Avg function length: {fp.avg_func_length:.0f} lines")
     console.print(f"  Import style: {fp.from_import_ratio:.0%} from-imports")
     console.print(f"  Docstring usage: {fp.docstring_ratio:.0%}")
+    console.print(f"  Type annotations: {fp.type_annotation_ratio:.0%} params, {fp.return_annotation_ratio:.0%} returns")
+    console.print(f"  Error handling: {fp.try_except_ratio:.0%} funcs use try/except, {fp.specific_except_ratio:.0%} specific")
+    console.print(f"  Decorators: {fp.decorator_density:.1f} per function")
+
+
+@main.command()
+def serve():
+    """Start VibeDiff as an MCP tool server (stdio)."""
+    from vibediff.mcp_server import run_server
+    run_server()

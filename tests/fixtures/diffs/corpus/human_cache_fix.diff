@@ -1,0 +1,28 @@
+diff --git a/cache.py b/cache.py
+index 0b15b19..58b8156 100644
+--- a/cache.py
++++ b/cache.py
+@@ -8,11 +8,18 @@ class TTLCache:
+         self._d = {}
+
+     def get(self, k):
+-        if k not in self._d:
++        entry = self._d.get(k)
++        if entry is None:
+             return None
+-        return self._d[k]
++        ts, v = entry
++        if time.monotonic() - ts > self._ttl:
++            del self._d[k]
++            return None
++        return v
+
+-    def put(self, k, v):
+-        self._d[k] = v
++    def put(self, k, v, ttl=None):
++        t = ttl or self._ttl
++        self._d[k] = (time.monotonic(), v)
+         if len(self._d) > self._max:
+-            self._d.pop(next(iter(self._d)))
++            oldest = min(self._d, key=lambda x: self._d[x][0])
++            del self._d[oldest]

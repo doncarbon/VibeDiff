@@ -11,6 +11,9 @@ inputs:
   fingerprint:
     description: 'Path to fingerprint.json (enables style drift detection)'
     default: ''
+  anthropic_api_key:
+    description: 'Anthropic API key for LLM synthesis (optional)'
+    default: ''
 
 runs:
   using: 'composite'
@@ -23,9 +26,9 @@ runs:
       shell: bash
       run: |
         if [ "${{ inputs.version }}" = "latest" ]; then
-          pip install vibediff
+          pip install "vibediff[llm]"
         else
-          pip install vibediff==${{ inputs.version }}
+          pip install "vibediff[llm]==${{ inputs.version }}"
         fi
 
     - name: Set up fingerprint
@@ -39,5 +42,10 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
       run: |
-        vibediff review --pr "${{ github.event.pull_request.number }}" --format md >> "$GITHUB_STEP_SUMMARY"
+        SYNTH_FLAG=""
+        if [ -n "$ANTHROPIC_API_KEY" ]; then
+          SYNTH_FLAG="--synthesize"
+        fi
+        vibediff review --pr "${{ github.event.pull_request.number }}" --format md $SYNTH_FLAG >> "$GITHUB_STEP_SUMMARY"

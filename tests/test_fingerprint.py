@@ -1,7 +1,6 @@
-import tempfile
 from pathlib import Path
 
-from vibediff.fingerprint import scan, Fingerprint
+from vibediff.fingerprint import scan
 
 
 def _write_files(tmpdir: Path, files: dict[str, str]):

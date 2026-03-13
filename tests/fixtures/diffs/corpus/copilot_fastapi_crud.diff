@@ -1,0 +1,141 @@
+diff --git a/src/api/user_management_router.py b/src/api/user_management_router.py
+new file mode 100644
+index 0000000..b3c4d5e
+--- /dev/null
++++ b/src/api/user_management_router.py
+@@ -0,0 +1,120 @@
++"""User management router module.
++
++This module provides API endpoints for managing users including
++creating, reading, updating, and deleting user records.
++"""
++
++import logging
++from typing import Optional
++
++from fastapi import APIRouter, HTTPException, Depends
++from pydantic import BaseModel
++
++# Initialize the router for user management endpoints
++router = APIRouter(prefix="/users", tags=["users"])
++
++# Set up logging for this module
++logger = logging.getLogger(__name__)
++
++
++class UserCreateRequest(BaseModel):
++    """Request model for creating a new user."""
++    username: str
++    email: str
++    full_name: Optional[str] = None
++
++
++class UserUpdateRequest(BaseModel):
++    """Request model for updating an existing user."""
++    email: Optional[str] = None
++    full_name: Optional[str] = None
++
++
++class UserResponse(BaseModel):
++    """Response model for user data."""
++    user_id: int
++    username: str
++    email: str
++    full_name: Optional[str] = None
++
++
++@router.get("/{user_id}", response_model=UserResponse)
++def get_user_by_id(user_id: int, db=Depends(get_database_session)):
++    """Retrieve a user by their unique identifier.
++
++    Args:
++        user_id: The unique identifier of the user to retrieve.
++        db: The database session dependency.
++
++    Returns:
++        UserResponse containing the user's information.
++
++    Raises:
++        HTTPException: If the user is not found.
++    """
++    # Validate that the user_id is a positive integer
++    if user_id is None or user_id <= 0:
++        raise HTTPException(status_code=400, detail="Invalid user ID")
++
++    # Query the database for the user
++    user_record = db.query(User).filter(User.id == user_id).first()
++
++    # Check if the user exists
++    if user_record is None:
++        raise HTTPException(status_code=404, detail="User not found")
++
++    # Return the user data
++    return UserResponse(
++        user_id=user_record.id,
++        username=user_record.username,
++        email=user_record.email,
++        full_name=user_record.full_name,
++    )
++
++
++@router.post("/", response_model=UserResponse)
++def create_new_user(request: UserCreateRequest, db=Depends(get_database_session)):
++    """Create a new user in the system.
++
++    Args:
++        request: The user creation request containing user details.
++        db: The database session dependency.
++
++    Returns:
++        UserResponse containing the newly created user's information.
++    """
++    # Check if the username already exists
++    existing_user = db.query(User).filter(User.username == request.username).first()
++    if existing_user is not None:
++        raise HTTPException(status_code=409, detail="Username already exists")
++
++    # Create the new user record
++    new_user = User(
++        username=request.username,
++        email=request.email,
++        full_name=request.full_name,
++    )
++
++    try:
++        # Save the user to the database
++        db.add(new_user)
++        db.commit()
++        db.refresh(new_user)
++    except Exception as e:
++        # Handle any database errors
++        logger.error(f"Failed to create user: {e}")
++        db.rollback()
++        raise HTTPException(status_code=500, detail="Failed to create user")
++
++    # Return the created user
++    return UserResponse(
++        user_id=new_user.id,
++        username=new_user.username,
++        email=new_user.email,
++        full_name=new_user.full_name,
++    )
++
++
++@router.delete("/{user_id}")
++def delete_user_by_id(user_id: int, db=Depends(get_database_session)):
++    """Delete a user by their unique identifier.
++
++    Args:
++        user_id: The unique identifier of the user to delete.
++        db: The database session dependency.
++    """
++    # Check if the user exists
++    user_record = db.query(User).filter(User.id == user_id).first()
++    if user_record is None:
++        raise HTTPException(status_code=404, detail="User not found")
++
++    # Delete the user from the database
++    db.delete(user_record)
++    db.commit()
++
++    return {"message": "User deleted successfully"}

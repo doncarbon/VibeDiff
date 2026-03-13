@@ -1,0 +1,42 @@
+diff --git a/parse.py b/parse.py
+index a5ba4af..29f72bf 100644
+--- a/parse.py
++++ b/parse.py
+@@ -1,16 +1,24 @@
+ import re
++from dataclasses import dataclass
++
++
++@dataclass
++class Entry:
++    key: str
++    val: str
++
++
++_PAIR = re.compile(r'(\w+)\s*=\s*(.*)')
++
+
+ def parse(raw):
+-    out = []
+-    for line in raw.split('\n'):
+-        line = line.strip()
+-        if not line:
+-            continue
+-        m = re.match(r'(\w+)\s*=\s*(.*)', line)
+-        if m:
+-            out.append((m.group(1), m.group(2)))
+-    return out
+-
+-
+-def fmt(pairs):
+-    return '\n'.join(f'{k}: {v}' for k, v in pairs)
++    entries = []
++    for ln in raw.splitlines():
++        ln = ln.strip()
++        if m := _PAIR.match(ln):
++            entries.append(Entry(m[1], m[2]))
++    return entries
++
++
++def fmt(entries):
++    return '\n'.join(f'{e.key}: {e.val}' for e in entries)

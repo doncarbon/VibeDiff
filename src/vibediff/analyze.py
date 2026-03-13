@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from vibediff.diff import FileDiff, Diff
+from vibediff.diff import Diff, FileDiff
 
 
 @dataclass
@@ -54,6 +54,15 @@ DOCSTRING_RESTATE = re.compile(
 )
 
 
+def _signal_score(findings: list[Finding]) -> float:
+    """Score a set of findings: strongest signal + bonus for breadth."""
+    if not findings:
+        return 0.0
+    best = max(f.severity for f in findings)
+    breadth_bonus = min((len(findings) - 1) * 0.15, 0.3)
+    return min(best + breadth_bonus, 1.0) * 100
+
+
 def _score_comments(files: list[FileDiff]) -> tuple[float, list[Finding]]:
     findings: list[Finding] = []
     total_added = 0
@@ -85,19 +94,18 @@ def _score_comments(files: list[FileDiff]) -> tuple[float, list[Finding]]:
 
     comment_ratio = comment_lines / total_added
 
-    # High comment ratio is suspicious
-    if comment_ratio > 0.25:
+    if comment_ratio > 0.15:
         findings.append(Finding(
             signal="comment_density",
             detail=f"{comment_ratio:.0%} of added lines are comments (typical human code: 5-15%)",
-            severity=min(comment_ratio / 0.4, 1.0),
+            severity=min(comment_ratio / 0.35, 1.0),
         ))
 
-    if restate_count >= 3:
+    if restate_count >= 2:
         findings.append(Finding(
             signal="restating_comments",
             detail=f"{restate_count} comments that restate what the code does",
-            severity=min(restate_count / 8, 1.0),
+            severity=min(restate_count / 6, 1.0),
         ))
 
     if section_headers >= 2:
@@ -111,11 +119,10 @@ def _score_comments(files: list[FileDiff]) -> tuple[float, list[Finding]]:
         findings.append(Finding(
             signal="docstring_restates",
             detail=f"{docstring_restates} docstrings that restate the function name",
-            severity=min(docstring_restates / 5, 1.0),
+            severity=min(docstring_restates / 4, 1.0),
         ))
 
-    weights = [f.severity for f in findings]
-    return (sum(weights) / max(len(weights), 1)) * 100, findings
+    return _signal_score(findings), findings
 
 
 # --- naming pattern detection ---
@@ -170,7 +177,7 @@ def _score_naming(files: list[FileDiff]) -> tuple[float, list[Finding]]:
     if len(func_names) >= 4:
         lengths = [_word_count(n) for n in func_names]
         avg = sum(lengths) / len(lengths)
-        variance = sum((l - avg) ** 2 for l in lengths) / len(lengths)
+        variance = sum((x - avg) ** 2 for x in lengths) / len(lengths)
         if variance < 0.5 and avg >= 3:
             findings.append(Finding(
                 signal="uniform_naming",
@@ -189,8 +196,7 @@ def _score_naming(files: list[FileDiff]) -> tuple[float, list[Finding]]:
                 severity=0.5,
             ))
 
-    weights = [f.severity for f in findings]
-    return (sum(weights) / max(len(weights), 1)) * 100, findings
+    return _signal_score(findings), findings
 
 
 # --- burstiness / uniformity detection ---
@@ -240,7 +246,7 @@ def _score_burstiness(files: list[FileDiff]) -> tuple[float, list[Finding]]:
             severity=severity,
         ))
 
-    return (sum(f.severity for f in findings) / max(len(findings), 1)) * 100, findings
+    return _signal_score(findings), findings
 
 
 # --- structural patterns ---
@@ -271,23 +277,22 @@ def _score_structure(files: list[FileDiff]) -> tuple[float, list[Finding]]:
 
     # Excessive guard clauses
     guard_ratio = guard_count / func_count
-    if guard_ratio >= 1.0 and guard_count >= 3:
+    if guard_ratio >= 0.5 and guard_count >= 2:
         findings.append(Finding(
             signal="excessive_guards",
             detail=f"{guard_count} 'is None' guards across {func_count} functions",
-            severity=min(guard_ratio / 2, 1.0),
+            severity=min(guard_ratio / 1.5, 1.0),
         ))
 
     # Broad exception handling
-    if broad_except_count >= 2:
+    if broad_except_count >= 1:
         findings.append(Finding(
             signal="broad_exceptions",
             detail=f"{broad_except_count} broad 'except Exception' blocks",
             severity=min(broad_except_count / 4, 1.0),
         ))
 
-    weights = [f.severity for f in findings]
-    return (sum(weights) / max(len(weights), 1)) * 100, findings
+    return _signal_score(findings), findings
 
 
 # --- main entry point ---
@@ -320,5 +325,11 @@ def analyze_ai(diff: Diff) -> AnalysisReport:
     scores["structure"], findings = _score_structure(python_files)
     all_findings.extend(findings)
 
-    weighted = sum(scores[k] * SIGNAL_WEIGHTS[k] for k in SIGNAL_WEIGHTS)
+    # Only weight categories that fired — zeros shouldn't dilute the score
+    active = {k: v for k, v in scores.items() if v > 0}
+    if not active:
+        return AnalysisReport(ai_score=0, findings=all_findings)
+
+    active_weight = sum(SIGNAL_WEIGHTS[k] for k in active)
+    weighted = sum(scores[k] * SIGNAL_WEIGHTS[k] / active_weight for k in active)
     return AnalysisReport(ai_score=min(weighted, 100), findings=all_findings)

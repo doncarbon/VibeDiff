@@ -1,4 +1,4 @@
-from vibediff.collaboration import analyze_collaboration, CollabReport
+from vibediff.collaboration import CollabReport, analyze_collaboration
 from vibediff.diff import Diff, FileDiff, Hunk
 
 

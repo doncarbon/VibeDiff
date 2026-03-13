@@ -1,0 +1,110 @@
+diff --git a/tests/test_user_service.py b/tests/test_user_service.py
+new file mode 100644
+index 0000000..c1d2e3f
+--- /dev/null
++++ b/tests/test_user_service.py
+@@ -0,0 +1,95 @@
++"""Tests for the user service module."""
++
++import pytest
++from unittest.mock import MagicMock, patch
++
++from app.services.user_service import UserService
++
++
++class TestUserService:
++    """Test cases for the UserService class."""
++
++    def setup_method(self):
++        """Set up test fixtures for each test method."""
++        self.mock_database = MagicMock()
++        self.mock_cache = MagicMock()
++        self.service = UserService(
++            database=self.mock_database,
++            cache=self.mock_cache,
++        )
++
++    def test_get_user_by_id_returns_user_when_found(self):
++        """Test that get_user_by_id returns the user when the user exists."""
++        # Arrange
++        expected_user = {"id": 1, "username": "testuser", "email": "test@example.com"}
++        self.mock_database.find_by_id.return_value = expected_user
++
++        # Act
++        result = self.service.get_user_by_id(1)
++
++        # Assert
++        assert result == expected_user
++        self.mock_database.find_by_id.assert_called_once_with(1)
++
++    def test_get_user_by_id_returns_none_when_not_found(self):
++        """Test that get_user_by_id returns None when the user does not exist."""
++        # Arrange
++        self.mock_database.find_by_id.return_value = None
++
++        # Act
++        result = self.service.get_user_by_id(999)
++
++        # Assert
++        assert result is None
++
++    def test_create_user_successfully_creates_new_user(self):
++        """Test that create_user successfully creates a new user."""
++        # Arrange
++        user_data = {"username": "newuser", "email": "new@example.com"}
++        self.mock_database.find_by_username.return_value = None
++        self.mock_database.create.return_value = {"id": 2, **user_data}
++
++        # Act
++        result = self.service.create_user(user_data)
++
++        # Assert
++        assert result["username"] == "newuser"
++        self.mock_database.create.assert_called_once()
++
++    def test_create_user_raises_error_when_username_exists(self):
++        """Test that create_user raises an error when the username already exists."""
++        # Arrange
++        user_data = {"username": "existing", "email": "test@example.com"}
++        self.mock_database.find_by_username.return_value = {"id": 1}
++
++        # Act & Assert
++        with pytest.raises(ValueError, match="Username already exists"):
++            self.service.create_user(user_data)
++
++    def test_update_user_successfully_updates_existing_user(self):
++        """Test that update_user successfully updates an existing user."""
++        # Arrange
++        update_data = {"email": "updated@example.com"}
++        existing_user = {"id": 1, "username": "testuser", "email": "old@example.com"}
++        self.mock_database.find_by_id.return_value = existing_user
++        self.mock_database.update.return_value = {**existing_user, **update_data}
++
++        # Act
++        result = self.service.update_user(1, update_data)
++
++        # Assert
++        assert result["email"] == "updated@example.com"
++
++    def test_delete_user_successfully_deletes_existing_user(self):
++        """Test that delete_user successfully deletes an existing user."""
++        # Arrange
++        self.mock_database.find_by_id.return_value = {"id": 1}
++
++        # Act
++        result = self.service.delete_user(1)
++
++        # Assert
++        assert result is True
++        self.mock_database.delete.assert_called_once_with(1)
++
++    def test_delete_user_returns_false_when_user_not_found(self):
++        """Test that delete_user returns False when the user does not exist."""
++        # Arrange
++        self.mock_database.find_by_id.return_value = None
++
++        # Act
++        result = self.service.delete_user(999)
++
++        # Assert
++        assert result is False

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vibediff"
-version = "0.1.1"
+version = "0.2.0"
 description = "Knows when a PR doesn't belong in your codebase."
 readme = "README.md"
 license = "MIT"
@@ -21,6 +21,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+llm = ["anthropic>=0.40"]
+mcp = ["mcp>=1.0"]
+all = ["anthropic>=0.40", "mcp>=1.0"]
 dev = ["pytest", "pytest-cov", "ruff", "mypy"]
 
 [project.scripts]

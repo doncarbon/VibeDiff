@@ -3,16 +3,20 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from vibediff.diff import Diff, FileDiff
+from vibediff.diff import Diff
 from vibediff.fingerprint import Fingerprint, _word_count
 
 FUNC_DEF = re.compile(r"^\s*def\s+(\w+)")
+FUNC_DEF_FULL = re.compile(r"^\s*def\s+\w+\(([^)]*)\)(\s*->\s*\S+)?")
 SNAKE_CASE = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)+$")
 CAMEL_CASE = re.compile(r"^[a-z][a-zA-Z0-9]*[A-Z][a-zA-Z0-9]*$")
 COMMENT_LINE = re.compile(r"^\s*#")
 IMPORT_FROM = re.compile(r"^\s*from\s+\S+\s+import\s+")
 IMPORT_BARE = re.compile(r"^\s*import\s+")
 DOCSTRING_OPEN = re.compile(r'^\s*("""|\'\'\')')
+EXCEPT_SPECIFIC = re.compile(r"^\s*except\s+(?!Exception\b|BaseException\b)\w+")
+EXCEPT_BROAD = re.compile(r"^\s*except\s*(Exception|BaseException|\s*:)")
+DECORATOR = re.compile(r"^\s*@\w+")
 
 
 @dataclass
@@ -203,27 +207,144 @@ def _check_imports(diff: Diff, fp: Fingerprint) -> list[DriftFinding]:
     return findings
 
 
-DRIFT_WEIGHTS = {
-    "naming": 0.35,
-    "comments": 0.25,
-    "func_length": 0.20,
-    "imports": 0.20,
-}
+def _check_error_handling(diff: Diff, fp: Fingerprint) -> list[DriftFinding]:
+    findings = []
+    if fp.specific_except_ratio == 0 and fp.try_except_ratio == 0:
+        return findings
+
+    pr_specific = 0
+    pr_broad = 0
+    for f in diff.files:
+        if f.language != "python":
+            continue
+        for line in f.added:
+            if EXCEPT_SPECIFIC.match(line):
+                pr_specific += 1
+            elif EXCEPT_BROAD.match(line):
+                pr_broad += 1
+
+    pr_total = pr_specific + pr_broad
+    if pr_total < 2:
+        return findings
+
+    pr_specific_ratio = pr_specific / pr_total
+
+    # Codebase uses specific exceptions but PR uses broad ones
+    if fp.specific_except_ratio > 0.6 and pr_specific_ratio < 0.3:
+        findings.append(DriftFinding(
+            signal="error_handling",
+            expected=f"specific exceptions ({fp.specific_except_ratio:.0%} of codebase)",
+            found=f"broad exceptions ({pr_broad}/{pr_total} in PR)",
+            severity=min((fp.specific_except_ratio - pr_specific_ratio) / 0.5, 1.0),
+        ))
+
+    return findings
+
+
+def _check_type_annotations(diff: Diff, fp: Fingerprint) -> list[DriftFinding]:
+    findings = []
+
+    pr_params = 0
+    pr_annotated = 0
+    pr_funcs = 0
+    pr_return_annotated = 0
+
+    for f in diff.files:
+        if f.language != "python":
+            continue
+        for line in f.added:
+            fm = FUNC_DEF_FULL.match(line)
+            if fm:
+                pr_funcs += 1
+                if fm.group(2):
+                    pr_return_annotated += 1
+                for param in fm.group(1).split(","):
+                    param = param.strip()
+                    if not param or param in ("self", "cls"):
+                        continue
+                    pr_params += 1
+                    if ":" in param:
+                        pr_annotated += 1
+
+    if pr_params < 3:
+        return findings
+
+    pr_ratio = pr_annotated / pr_params
+
+    # Codebase uses annotations but PR doesn't
+    if fp.type_annotation_ratio > 0.6 and pr_ratio < 0.3:
+        findings.append(DriftFinding(
+            signal="type_annotations",
+            expected=f"type hints ({fp.type_annotation_ratio:.0%} of params)",
+            found=f"no type hints ({pr_annotated}/{pr_params} params)",
+            severity=min((fp.type_annotation_ratio - pr_ratio) / 0.5, 1.0),
+        ))
+    # Codebase doesn't use annotations but PR does
+    elif fp.type_annotation_ratio < 0.2 and pr_ratio > 0.7:
+        findings.append(DriftFinding(
+            signal="type_annotations",
+            expected=f"no type hints ({fp.type_annotation_ratio:.0%} of params)",
+            found=f"type hints on {pr_annotated}/{pr_params} params",
+            severity=min((pr_ratio - fp.type_annotation_ratio) / 0.5, 1.0),
+        ))
+
+    return findings
+
+
+def _check_decorators(diff: Diff, fp: Fingerprint) -> list[DriftFinding]:
+    findings = []
+    if fp.decorator_density == 0:
+        return findings
+
+    pr_decorators = 0
+    pr_funcs = 0
+    for f in diff.files:
+        if f.language != "python":
+            continue
+        for line in f.added:
+            if DECORATOR.match(line):
+                pr_decorators += 1
+            if FUNC_DEF.match(line):
+                pr_funcs += 1
+
+    if pr_funcs < 2:
+        return findings
+
+    pr_density = pr_decorators / pr_funcs
+    ratio = pr_density / fp.decorator_density if fp.decorator_density > 0 else 0
+
+    if ratio > 3.0 and pr_decorators >= 4:
+        findings.append(DriftFinding(
+            signal="decorator_density",
+            expected=f"{fp.decorator_density:.1f} decorators/function",
+            found=f"{pr_density:.1f} decorators/function ({ratio:.1f}x more)",
+            severity=min((ratio - 1) / 4, 1.0),
+        ))
+
+    return findings
+
+
+DRIFT_CHECKS = [
+    _check_naming,
+    _check_comments,
+    _check_func_length,
+    _check_imports,
+    _check_error_handling,
+    _check_type_annotations,
+    _check_decorators,
+]
 
 
 def analyze_drift(diff: Diff, fp: Fingerprint) -> DriftReport:
     all_findings = []
-
-    all_findings.extend(_check_naming(diff, fp))
-    all_findings.extend(_check_comments(diff, fp))
-    all_findings.extend(_check_func_length(diff, fp))
-    all_findings.extend(_check_imports(diff, fp))
+    for check in DRIFT_CHECKS:
+        all_findings.extend(check(diff, fp))
 
     if not all_findings:
         return DriftReport(drift_score=0)
 
     avg_severity = sum(f.severity for f in all_findings) / len(all_findings)
-    coverage = min(len(all_findings) / 4, 1.0)  # more categories flagged = higher score
+    coverage = min(len(all_findings) / len(DRIFT_CHECKS), 1.0)
     score = avg_severity * coverage * 100
 
     return DriftReport(drift_score=min(score, 100), findings=all_findings)

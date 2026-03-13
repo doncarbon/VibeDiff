@@ -1,0 +1,101 @@
+diff --git a/src/services/data_processor.py b/src/services/data_processor.py
+new file mode 100644
+index 0000000..f4a5b6c
+--- /dev/null
++++ b/src/services/data_processor.py
+@@ -0,0 +1,85 @@
++"""Data processor service module."""
++
++import logging
++from typing import Optional, Any
++
++# Initialize the logger
++logger = logging.getLogger(__name__)
++
++
++class AbstractDataProcessor:
++    """Abstract base class for data processors."""
++
++    def process(self, data: Any) -> Any:
++        """Process the given data."""
++        raise NotImplementedError
++
++
++class DataProcessorInterface:
++    """Interface for data processor implementations."""
++
++    def validate(self, data: Any) -> bool:
++        """Validate the given data."""
++        raise NotImplementedError
++
++    def transform(self, data: Any) -> Any:
++        """Transform the given data."""
++        raise NotImplementedError
++
++
++class JsonDataProcessor(AbstractDataProcessor, DataProcessorInterface):
++    """Processor for JSON data format."""
++
++    def __init__(self, configuration_settings: dict):
++        """Initialize the JsonDataProcessor."""
++        self._configuration_settings = configuration_settings
++        self._processed_count = 0
++        self._error_count = 0
++
++    def get_ProcessedCount(self) -> int:
++        """Get the number of processed items."""
++        return self._processed_count
++
++    def set_ProcessedCount(self, value: int) -> None:
++        """Set the number of processed items."""
++        self._processed_count = value
++
++    def get_ErrorCount(self) -> int:
++        """Get the number of errors."""
++        return self._error_count
++
++    def get_ConfigurationSettings(self) -> dict:
++        """Get the configuration settings."""
++        return self._configuration_settings
++
++    def validate(self, data: Any) -> bool:
++        """Validate the given data.
++
++        Args:
++            data: The data to validate.
++
++        Returns:
++            True if the data is valid, False otherwise.
++        """
++        # Check if the data is not None
++        if data is None:
++            return False
++        # Check if the data is a dictionary
++        if not isinstance(data, dict):
++            return False
++        return True
++
++    def process(self, data: Any) -> Optional[dict]:
++        """Process the given data.
++
++        Args:
++            data: The data to process.
++
++        Returns:
++            The processed data or None if processing fails.
++        """
++        # Validate the input data
++        if not self.validate(data):
++            logger.warning("Invalid data received")
++            return None
++
++        try:
++            # Transform the data
++            result = self.transform(data)
++            self._processed_count += 1
++            return result
++        except Exception as e:
++            # Handle any processing errors
++            logger.error(f"Processing error: {e}")
++            self._error_count += 1
++            return None
