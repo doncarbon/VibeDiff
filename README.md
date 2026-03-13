@@ -52,6 +52,14 @@ VibeDiff learns how your project actually writes code, then tells you when a PR 
 pip install vibediff
 ```
 
+Optional extras:
+
+```bash
+pip install "vibediff[llm]"   # Claude API synthesis
+pip install "vibediff[mcp]"   # MCP server for AI editors
+pip install "vibediff[all]"   # everything
+```
+
 ## Usage
 
 ```bash
@@ -61,20 +69,56 @@ vibediff review --pr 42             # review a GitHub PR (requires gh CLI)
 vibediff learn                      # learn your codebase conventions
 vibediff review HEAD~1 --format json  # JSON output for CI
 vibediff review HEAD~1 --format md    # markdown output for PR comments
+vibediff review --synthesize        # add Claude-powered natural language summary
+vibediff serve                      # start MCP tool server
 ```
 
 ## What it does
 
-Every diff gets a letter grade (A–F) from 4 analyzers:
+Every diff gets a letter grade (A-F) from 4 analyzers:
 
 | Analyzer | What it finds |
 |---|---|
-| **AI Detection** | Restating comments, verbose naming, uniform line complexity, excessive `is None` guards |
-| **Style Drift** | Naming convention mismatch, comment density deviation, function length drift, import style mismatch |
+| **AI Detection** | Restating comments, verbose naming, uniform line complexity, excessive `is None` guards, broad exceptions |
+| **Style Drift** | Naming convention mismatch, comment density deviation, function length drift, import style, type annotation drift, error handling style, decorator density |
 | **Collaboration** | Unresolved TODOs, generic variable names, placeholder stubs, uniform style across files |
 | **Idiom Contamination** | Java getters in Python, Go error-returns, C-style null checks, JS callback patterns |
 
-Style Drift requires a fingerprint — run `vibediff learn` in your repo first.
+Style Drift requires a fingerprint — run `vibediff learn` in your repo first. The fingerprint captures naming conventions, comment density, function lengths, import style, type annotation usage, error handling patterns, and decorator density.
+
+## LLM Synthesis
+
+Add `--synthesize` to get a Claude-powered natural language summary of the review:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+vibediff review HEAD~1 --synthesize
+```
+
+Requires `pip install "vibediff[llm]"`. Gracefully degrades — if the API key is missing or the package isn't installed, everything else still works.
+
+## MCP Server
+
+VibeDiff ships as an MCP tool server so AI editors (Claude Code, Cursor, etc.) can call it directly:
+
+```bash
+vibediff serve
+```
+
+Exposes two tools: `review` and `learn`. Configure in your editor's MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "vibediff": {
+      "command": "vibediff",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+Requires `pip install "vibediff[mcp]"`.
 
 ## GitHub Action
 
@@ -101,6 +145,14 @@ To enable drift detection, commit your fingerprint and pass it:
       - uses: doncarbon/VibeDiff@main
         with:
           fingerprint: .vibediff-cache/fingerprint.json
+```
+
+To enable LLM synthesis, pass your Anthropic API key:
+
+```yaml
+      - uses: doncarbon/VibeDiff@main
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
 ---
